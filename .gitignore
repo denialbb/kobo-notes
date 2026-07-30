@@ -9,3 +9,6 @@ Thumbs.db
 
 # KOReader installed build reference (not ours)
 /mnt/
+
+# PAT file (GitHub token copied to Kobo)
+secrets/pat
