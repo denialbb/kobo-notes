@@ -38,7 +38,7 @@ describe("MathRenderer.cacheKey", function()
     it("distinguishes backends", function()
         assert.are.not_equal(
             MathRenderer.cacheKey("lua", "x^2", false),
-            MathRenderer.cacheKey("microtex", "x^2", false))
+            MathRenderer.cacheKey("other_backend", "x^2", false))
     end)
 end)
 
@@ -60,10 +60,14 @@ describe("MathRenderer backend selection", function()
     end)
 
     it("falls back to Lua when a native backend is unavailable", function()
-        -- 'microtex' is registered but its module does not exist: this is the
-        -- exact "no .so on the device" case, and it must never raise.
-        assert.has_no_error(function() MathRenderer.new{ backend = "microtex" } end)
-        local r = MathRenderer.new{ backend = "microtex" }
+        -- Register a backend that fails to load (e.g. missing .so file)
+        MathRenderer.registerBackend("missing_native", function()
+            local ok, mod = pcall(require, "some_nonexistent_module")
+            if not ok then return nil end
+            return mod
+        end)
+        assert.has_no_error(function() MathRenderer.new{ backend = "missing_native" } end)
+        local r = MathRenderer.new{ backend = "missing_native" }
         assert.are.equal("lua", r.backend_id)
     end)
 

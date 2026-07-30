@@ -140,7 +140,7 @@ confirm by rendering on device before building anything substantial on it.
 3. **Only then** decide whether the ~100 remaining formulas justify a native
    backend behind the existing seam.
 
-Step 1 is not yet done as of this record.
+Step 1 has been implemented.
 
 ## Correction on the record
 
