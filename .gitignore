@@ -11,4 +11,4 @@ Thumbs.db
 /mnt/
 
 # PAT file (GitHub token copied to Kobo)
-secrets/pat
+secrets/
