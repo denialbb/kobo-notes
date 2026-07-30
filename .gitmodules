@@ -1,0 +1,6 @@
+[submodule "plugins/syncnotes.koplugin"]
+	path = plugins/syncnotes.koplugin
+	url = git@github.com:denialbb/syncnotes.koplugin.git
+[submodule "plugins/markdownreader.koplugin"]
+	path = plugins/markdownreader.koplugin
+	url = git@github.com:denialbb/markdownreader.koplugin.git
