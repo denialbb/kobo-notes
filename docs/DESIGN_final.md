@@ -1,15 +1,44 @@
 # Project Design: AI-2526 Notes on Kobo (Final)
 
-**Status:** Final (post-review) · **Date:** 2026-07-30  
-**Target device:** Kobo e-reader with **KOReader v2025.10** at `/mnt/kobo/.adds/koreader`  
-**Reference source:** `~/.repos/koreader` (HEAD `574fe9f`)  
+**Status:** Implemented & deployed · **Date:** 2026-07-30  
+**Target device:** Kobo e-reader with **KOReader v2026.07** at `/mnt/kobo/.adds/koreader`  
+**Reference source:** `/mnt/kobo/.adds/koreader/` — the deployed device install
+(`git-rev` → `v2026.07`). The full KOReader Lua frontend ships on the device, so
+the device *is* the reference source.  
 **Original draft:** `/tmp/kobo-research/PROJECT_OVERVIEW.md` — superseded by this document  
 
 **Reviewer findings:** Every API claim in the original draft was verified against
-the source clone at `~/.repos/koreader` and/or the deployed install at
-`/mnt/kobo/.adds/koreader`. Thirteen corrections and six open questions resolved
-below. All source citations are relative to `~/.repos/koreader` unless prefixed
-with `/mnt/kobo/.adds/koreader/`.
+a KOReader source clone at `~/.repos/koreader` (HEAD `574fe9f`). Thirteen
+corrections and six open questions resolved below.
+
+**⚠️ Re-verification, 2026-07-30:** that source clone **no longer exists**, and
+the device has since been updated from v2025.10 to **v2026.07**. Every source
+citation in this document was therefore re-verified with `rg -n` against the
+device's own `frontend/` tree at `/mnt/kobo/.adds/koreader/`. All source
+citations are now relative to `/mnt/kobo/.adds/koreader/`. Line numbers that
+moved have been corrected in place; see §2 and Appendix A for the ones that
+changed. **Every entry point we depend on is still present in v2026.07 with the
+signature this document records** — `addAuxProvider`, `mdToHtml`, `openFile`
+dispatch, `showReader`, `runWhenOnline`, `afterWifiAction`. One incidental
+citation went stale: `newsdownloader.koplugin` no longer calls
+`UIManager:forceRePaint()` at all (see §5.6).
+
+*Scope of that claim:* the v2025.10 tree is gone, so this is **not** a
+version-to-version diff. What was checked is the current v2026.07 source against
+the signatures recorded here — sufficient to establish that the design still
+holds on the deployed device, which is what matters, but it cannot rule out a
+signature that changed in a way the original review recorded imprecisely.
+
+**Repository layout note:** the two plugins live in **separate git submodule
+repos**, each with its own remote:
+
+| Path | Remote |
+| --- | --- |
+| `plugins/markdownreader.koplugin` | `git@github.com:denialbb/markdownreader.koplugin.git` |
+| `plugins/syncnotes.koplugin` | `git@github.com:denialbb/syncnotes.koplugin.git` |
+
+Clone with `git clone --recurse-submodules`, or run `git submodule update --init`
+afterwards — a plain clone leaves both plugin directories empty.
 
 ---
 
@@ -21,7 +50,7 @@ with `/mnt/kobo/.adds/koreader/`.
 4. [Use cases & user stories](#4-use-cases--user-stories)
 5. [Decisions](#5-decisions)
 6. [Plugin A: markdownreader.koplugin](#6-plugin-a-markdownreaderkoplugin)
-7. [Plugin B: aiactions_sync.koplugin](#7-plugin-b-aiactions_synckoplugin)
+7. [Plugin B: syncnotes.koplugin](#7-plugin-b-syncnoteskoplugin)
 8. [Open questions (answered)](#8-open-questions-answered)
 9. [Testing & verification plan](#9-testing--verification-plan)
 10. [Risks & mitigations](#10-risks--mitigations)
@@ -54,28 +83,32 @@ with `/mnt/kobo/.adds/koreader/`.
 
 ## 2. Verified constraints (reviewed)
 
-Each constraint verified against source at `~/.repos/koreader` or deployed device
-at `/mnt/kobo/.adds/koreader`. Corrections flagged with **⚠️**.
+Each constraint verified against the deployed device source at
+`/mnt/kobo/.adds/koreader` (re-verified 2026-07-30 against **v2026.07**).
+Corrections flagged with **⚠️**.
 
 | Constraint | Status | Evidence |
 | --- | --- | --- |
-| Kobo runs KOReader **v2025.10** | ✅ | `/mnt/kobo/.adds/koreader/git-rev` → `v2025.10` |
+| Kobo runs KOReader **v2026.07** | ✅ | `/mnt/kobo/.adds/koreader/git-rev` → `v2026.07` (was `v2025.10` at original review; device updated since) |
 | `.md` opens as **plain text** today (crengine has no md parser) | ✅ | `credocument.lua:1609` — `registry:addProvider("md", "text/plain", self)` (no weight → defaults to 100, same as html) |
 | No `git` binary on Kobo OS | ✅ | `/mnt/kobo/.adds/koreader/` contains `dropbear`, `dbclient`, `sftp-server` — no git; rootfs inaccessible |
 | HTTPS + JSON available in Lua | ✅ | `socket.http` at `common/socket.lua`; `ssl.https` at `common/ssl/https.lua`; `require("json")` used by `plugins/wallabag.koplugin/main.lua:23`; `require("ssl.https")` used by `frontend/socketutil.lua:8`; `require("ltn12")` by `/tmp/kobo-research/a-on-device-sync.txt` pattern and many built-in plugins |
-| Pure-Lua markdown parser is bundled | ✅ | `frontend/apps/filemanager/lib/md.lua` (vendored `bakpakin/luamd`, 533 lines); `FileConverter:mdToHtml` at `filemanagerconverter.lua:42-56` wraps it into full HTML document |
+| Pure-Lua markdown parser is bundled | ✅ | `frontend/apps/filemanager/lib/md.lua` (vendored `bakpakin/luamd`, 533 lines); `FileConverter:mdToHtml` at `filemanagerconverter.lua:41-55` wraps it into full HTML document |
 | Plugins are hot-loaded, no rebuild | ✅ | `frontend/pluginloader.lua` — discovers `*.koplugin/` in `data_dir/plugins/`; user plugins enabled by default; toggle via Tools → Plugin management (see pluginloader.lua:174-232, 273-293) |
 | Aux document providers are a supported seam | ✅ | `DocumentRegistry:addAuxProvider(provider)` at `documentregistry.lua:55` — precedents: texteditor.koplugin (order 30), archiveviewer (order 40), imageviewer (order 10), textviewer (order 20) |
-| FileManager dispatches to aux providers | ✅ | `FileManager:openFile` at `filemanager.lua:1614-1637` — supports **both** `provider.callback(file)` (module style, used by imageviewer.lua:906) and `self[provider.provider]:openFile(file)` (plugin style, used by texteditor.koplugin:63) |
+| FileManager dispatches to aux providers | ✅ | `FileManager:openFile` at `filemanager.lua:1614-1637` — supports **both** `provider.callback(file)` (module style, used by imageviewer.lua:901) and `self[provider.provider]:openFile(file)` (plugin style, used by texteditor.koplugin:63) |
 | `ReaderUI:showReader(file, provider, seamless, is_provider_forced, after_open_callback)` opens a doc | ✅ | `readerui.lua:616` — also has `showReaderCoroutine` at 711 for async |
 | Wi-Fi must be requested safely | ✅ | `NetworkMgr:runWhenOnline(cb)` at `manager.lua:698`; `NetworkMgr:afterWifiAction(cb)` at `manager.lua:621`; used by `newsdownloader.koplugin:195`, `wallabag.koplugin` pattern |
-| UI is single-threaded; show progress + `UIManager:forceRePaint()` before blocking | ✅ | `dev-bestpractices.txt` §5; confirmed in `readerui.lua:710` (`UIManager:forceRePaint()` before blocking op; note it's **after** the InfoMessage `UIManager:show` line:709) |
+| UI is single-threaded; show progress + `UIManager:forceRePaint()` before blocking | ✅ | `dev-bestpractices.txt` §5; confirmed in `readerui.lua:718` (`UIManager:forceRePaint()` before blocking op; note it's **after** the InfoMessage `UIManager:show` at 712) |
 | Private repo needs auth for raw download | ✅ | GitHub API docs — `raw.githubusercontent.com` for private repos requires `Authorization: token <PAT>` |
 | GitHub authenticated REST limit: 5000 req/h; tree is 1 call; raw downloads don't count against REST | ✅ | GitHub REST API docs — tree API counted, raw downloads are infrastructure (not REST) |
-| OTA preserves user plugins | ✅ | OTA cleanup at `platform/kobo/koreader.sh:129` — `grep -xvFf` compares old vs new `package.index`; user plugins are **never** in package.index, so they're invisible to the diff and never deleted |
+| OTA preserves user plugins | ✅ | OTA cleanup at `koreader.sh:129` (repo path `platform/kobo/koreader.sh`; on the device it is installed at the install root) — `grep -xvFf` compares old vs new `package.index`; user plugins are **never** in package.index, so they're invisible to the diff and never deleted |
 | **⚠️ FileManager:openFile line number** | ❌ | Original doc claimed line 1551. Actual location: `filemanager.lua:1614` |
 | **⚠️ NetworkMgr:afterWifiAction line number** | ❌ | Original doc claimed line 605. `beforeWifiAction` is at 605; `afterWifiAction` is at **621** |
-| **⚠️ "latest stable KOReader = v2026.07"** | **UNVERIFIED** | The deployed device is v2025.10. The source clone is a shallow clone with no tags (HEAD `574fe9f`). No check was done against the OTA server. **This claim is irrelevant to the design** — our plugins only require APIs present in v2025.10. If the user updates KOReader later, nothing breaks. Recommend removing this claim entirely. |
+| **⚠️ "latest stable KOReader = v2026.07"** | ✅ **RESOLVED 2026-07-30** | Originally marked UNVERIFIED (device was v2025.10, source clone was shallow with no tags, no OTA-server check performed) with a recommendation to drop the claim. It is now settled by observation rather than by argument: the device has been updated and `/mnt/kobo/.adds/koreader/git-rev` reads `v2026.07`. The original reasoning still held — nothing broke on update, because every API we depend on is unchanged (see the header re-verification note). |
+| **⚠️ Reference source clone `~/.repos/koreader` (HEAD `574fe9f`)** | ❌ **GONE** | The clone the original review cited no longer exists on disk. All ~30 file:line citations were re-verified on 2026-07-30 against the device's own `frontend/` tree, which ships the complete v2026.07 Lua source. Corrected line numbers are folded into this document; the ones that moved are listed in Appendix A. |
+| **⚠️ Sync plugin named `aiactions_sync.koplugin`** | ❌ | The plugin's real name — in this repo, on the device, and in its own submodule remote — is **`syncnotes.koplugin`** (`main.lua`, `manifest.lua`, `_meta.lua`). All occurrences corrected in §7. |
+| **⚠️ `newsdownloader.koplugin` cited as a `forceRePaint` precedent** | ❌ | In v2026.07 `plugins/newsdownloader.koplugin/main.lua` contains **no** call to `UIManager:forceRePaint()` (verified: `rg -n forceRePaint` → no matches). It still uses `NetworkMgr:runWhenOnline` at `main.lua:195`. The forceRePaint pattern itself is unaffected — it remains in core at `readerui.lua:718` — but that specific plugin is no longer an example of it. See §5.6. |
 | **⚠️ `DocumentRegistry:addAuxProvider` call signature** | ❌ | `b-md-reader-plugin.txt` calls `addAuxProvider("md", "text/markdown", {...})` (3 args). The actual API is `addAuxProvider(provider_table)` — **ONE** argument at `documentregistry.lua:55`. See also `plugins/texteditor.koplugin/main.lua:50` and `plugins/archiveviewer.koplugin/main.lua:42`. |
 
 ---
@@ -83,7 +116,7 @@ at `/mnt/kobo/.adds/koreader`. Corrections flagged with **⚠️**.
 ## 3. Background & problem
 
 The user keeps university course notes (AI-2526) in a private GitHub repo as `.md`
-files. They want to read these on their Kobo. KOReader v2025.10 cannot render `.md`
+files. They want to read these on their Kobo. KOReader v2026.07 still cannot render `.md`
 formatted out of the box (crengine registers `.md` as `text/plain`), and the Kobo
 has no git client. The deployed install already ships every primitive we need:
 a Lua markdown parser (`md.lua`), an HTML rendering engine (crengine), HTTPS
@@ -172,8 +205,8 @@ and the reader is useful for any `.md` files from any source.
 
 ### 5.3 addAuxProvider callback shape
 
-**Use `callback` field (module style)** — as demonstrated by `imageviewer.lua:906`
-and `textviewer.lua:928`. The callback is a closure capturing the plugin instance:
+**Use `callback` field (module style)** — as demonstrated by `imageviewer.lua:901`
+and `textviewer.lua:922`. The callback is a closure capturing the plugin instance:
 
 ```lua
 callback = function(file) self:openFile(file) end
@@ -181,7 +214,7 @@ callback = function(file) self:openFile(file) end
 
 This is simpler than the plugin method dispatch (`self[provider.provider]:openFile`)
 which requires the plugin to be registered via `self:registerModule()` — though
-that works too. Both are supported at `filemanager.lua:1619-1621`.
+that works too. Both are supported at `filemanager.lua:1625-1630`.
 
 ALSO required: `enabled_func` (matching the callback style), returning `true` for
 `.md` files. For plugin-style, `isFileTypeSupported` is used instead.
@@ -197,7 +230,7 @@ end
 
 ### 5.4 Reusing FileConverter:mdToHtml vs calling luamd directly
 
-**Use `FileConverter:mdToHtml`** (`filemanagerconverter.lua:42-56`). The
+**Use `FileConverter:mdToHtml`** (`filemanagerconverter.lua:41-55`). The
 module-level dependencies are `ButtonDialog`, `ConfirmBox`, `UIManager`, `lfs`,
 `logger`, `util`, `gettext`, `ffi/util` — **none** of these create a circular
 dependency or require FileManager context. The function wraps the luamd output
@@ -221,7 +254,7 @@ But this is a maintenance burden — **start with FileConverter**.
 
 ### 5.5 PAT storage
 
-**Dedicated LuaSettings file** at `DataStorage:getSettingsDir() .. "/aiactions_sync.lua"`.
+**Dedicated LuaSettings file** at `DataStorage:getSettingsDir() .. "/syncnotes.lua"`.
 This is the standard KOReader pattern for plugin settings (see
 `dev-bestpractices.txt` §5, `plugins/kosync.koplugin/main.lua:26`, and
 `frontend/luasettings.lua:89`). It avoids polluting `settings.reader.lua` and
@@ -232,14 +265,20 @@ only, following the principle of least privilege. Document this prominently.
 
 ### 5.6 Sync blocking strategy
 
-**Synchronous with `UIManager:forceRePaint()` progress updates** — matching the
-pattern used by `newsdownloader.koplugin` (see `main.lua:195,430,434`,
-`wallabag.koplugin`, `exporter.koplugin`). For hundreds of small `.md` files
+**Synchronous with `UIManager:forceRePaint()` progress updates** — the canonical
+example in v2026.07 is core: `readerui.lua:718`, where `forceRePaint()` is called
+right after showing an `InfoMessage` and immediately before a long blocking
+operation. **⚠️ Corrected 2026-07-30:** the original doc cited
+`newsdownloader.koplugin/main.lua:195,430,434` as the precedent. In v2026.07 that
+plugin no longer calls `forceRePaint()` anywhere (`rg -n forceRePaint` → no
+matches); only its `NetworkMgr:runWhenOnline` usage at `main.lua:195` still
+stands. `wallabag.koplugin` and `exporter.koplugin` remain WiFi/REST precedents.
+For hundreds of small `.md` files
 (typical university notes: ~2-20 KB each), total sync time is under a minute.
 The user explicitly invokes sync and expects a brief wait.
 
 If future measurements show unacceptable blocking, adopt coroutine chunking as
-demonstrated by `ReaderUI:showReaderCoroutine` at `readerui.lua:711-731` and
+demonstrated by `ReaderUI:showReaderCoroutine` at `readerui.lua:711-736` and
 the `kosync.koplugin` pattern (see `plugins/kosync.koplugin/`). But start simple.
 
 ---
@@ -251,8 +290,14 @@ the `kosync.koplugin` pattern (see `plugins/kosync.koplugin/`). But start simple
 ```
 /mnt/kobo/.adds/koreader/plugins/markdownreader.koplugin/
 ├── _meta.lua
-└── main.lua
+├── main.lua
+├── markdown_interceptor.lua   # math extraction / substitution (see §6.6)
+├── math_renderer.lua          # backend facade + content-addressed cache
+└── math_backend_lua.lua       # pure-Lua LaTeX subset → unicode/HTML
 ```
+
+The three math modules are described in §6.6; the original design in §6.2–§6.5
+below covers the `_meta.lua`/`main.lua` core and is unchanged by them.
 
 ### 6.2 `_meta.lua`
 
@@ -353,7 +398,7 @@ function MarkdownReader:openMarkdown(file)
     -- Convert markdown to full HTML document using the bundled converter.
     -- FileConverter:mdToHtml accepts (markdown_string, title, stylesheet_optional).
     -- It produces: <!DOCTYPE html><html><head><title>...</title><style>...</style></head><body>...</body></html>
-    -- See filemanagerconverter.lua:42-56.
+    -- See filemanagerconverter.lua:41-55.
     local html = FileConverter:mdToHtml(content, basename)
 
     -- Write to a persistent cache directory (not /tmp — could be volatile on Kobo).
@@ -403,22 +448,114 @@ return MarkdownReader
   for all `.md` files. The user can override per-file or per-type via
   long-press → *Open with...* (see `DocumentRegistry:setProvider` at
   `documentregistry.lua:210-222` and the Open With dialog at
-  `filemanager.lua:1464-1612`).
+  `filemanager.lua:1471-1612`).
 - **Reset:** user can tap *Reset default for .md files* in the Open With dialog,
-  which removes the association at `filemanager.lua:1530-1534`.
+  which removes the association at `filemanager.lua:1528-1531`.
 - **Fallback:** without the association, user can always long-press → *Open with*
   → select Markdown Reader for one-off use.
 
+### 6.6 LaTeX math rendering (added post-v1)
+
+University notes are full of `$...$` and `$$...$$`. luamd knows nothing about
+math, and crengine has no TeX engine, so formulas previously reached the screen
+as raw LaTeX source. The plugin now renders a useful subset of LaTeX **in pure
+Lua** — which is what preserves objective 3 ("without cross-compiling anything").
+
+#### Pipeline
+
+```
+.md file
+   │
+   ├─ markdown_interceptor.lua  — extract $...$ / $$...$$ → placeholder tokens
+   │
+   ├─ FileConverter:mdToHtml    — luamd renders the (math-free) markdown
+   │
+   ├─ markdown_interceptor.lua  — substitute tokens with rendered HTML
+   │
+   └─ ReaderUI:showReader       — crengine renders the resulting .html
+```
+
+**Why extraction happens *before* conversion:** luamd treats `_`, `*` and `\` as
+markup. Left in place, `$a_1 * b^*$` would be mangled into emphasis tags before
+math ever saw it. Extracting first turns each formula into an inert placeholder
+token that survives luamd untouched.
+
+**Why substitution happens *after* conversion:** the token is replaced with a
+finished HTML fragment. Keeping this step post-conversion means a backend is free
+to return either inline HTML (the pure-Lua backend) or an `<img>` element (a
+future rasterising backend) without the markdown layer caring which.
+
+#### Modules
+
+| Module | Responsibility |
+| --- | --- |
+| `markdown_interceptor.lua` | Scans the source for math spans, replaces them with tokens, and substitutes rendered output back in after `mdToHtml`. Owns all the `$`-disambiguation rules below. |
+| `math_renderer.lua` | Backend facade plus a content-addressed cache. Hashing is **djb2**, chosen so the module has **no dependency on the `bit` library** (which is not uniformly available across the Lua versions we test on). |
+| `math_backend_lua.lua` | The pure-Lua backend: a LaTeX subset translated to unicode and simple HTML. |
+
+The facade in `math_renderer.lua` is a deliberate **backend seam**. A native
+MicroTeX backend is designed but **DEFERRED** — it would require cross-compiling
+a C++ library for the Kobo, which objective 3 rules out for v1. The design for it
+lives in `docs/microtex_implementation_spec.html`.
+
+#### Cache
+
+Rendered math is cached under
+`DataStorage:getDataDir() .. "/cache/md/math/"`, keyed by content hash — the same
+formula appearing in fifty notes is rendered once.
+
+#### Inline `$` disambiguation
+
+Prose contains dollar signs. A `$` opens a math span only if **all** of:
+
+- it is not backslash-escaped;
+- the next character is neither whitespace nor a digit — this is what rejects
+  `costs $5`;
+- the preceding character is not alphanumeric.
+
+The search for the closing `$` **aborts at a blank line**, so an unmatched `$`
+cannot swallow the rest of the document. Math inside **fenced code blocks** and
+inside **inline code spans** is not extracted.
+
+**Known gap:** 4-space-indented code blocks are **not** detected, so a `$` inside
+one will still be extracted as math. This is the one known false positive.
+
+#### Graceful degradation
+
+Unsupported constructs — `\begin{cases}`, matrices, `align` environments — are
+not failures: they render as **monospace LaTeX source**, which is still readable.
+Beyond that, the entire math path in `main.lua` is wrapped in `pcall`, so a math
+failure **can never prevent a document from opening**. Worst case, the note opens
+with its formulas as plain text.
+
+#### Measured behaviour
+
+Measured against the user's real corpus:
+
+| Metric | Value |
+| --- | --- |
+| Files | 75 |
+| Formulas | 4952 |
+| Errors | 0 |
+| Degraded to source | 1.7% |
+| Heaviest note | 72 KB, 795 formulas |
+| Heaviest note, full pipeline | ~250 ms on desktop |
+
+Expect the on-device figure to be several times the desktop number — the Kobo's
+CPU is far slower — but this is a one-off cost per note open, and cached math
+makes re-opens cheaper.
+
 ---
 
-## 7. Plugin B: aiactions_sync.koplugin
+## 7. Plugin B: syncnotes.koplugin
 
 ### 7.1 Directory structure
 
 ```
-/mnt/kobo/.adds/koreader/plugins/aiactions_sync.koplugin/
+/mnt/kobo/.adds/koreader/plugins/syncnotes.koplugin/
 ├── _meta.lua
-└── main.lua
+├── main.lua
+└── manifest.lua   # SHA-manifest read/write/diff, extracted for unit testing
 ```
 
 ### 7.2 `_meta.lua`
@@ -426,7 +563,7 @@ return MarkdownReader
 ```lua
 local _ = require("gettext")
 return {
-    name = "aiactions_sync",
+    name = "syncnotes",
     fullname = _("Sync AI-2526 Notes"),
     description = _("Syncs markdown notes from github.com/denialbb/AI-2526.git master branch over Wi-Fi."),
 }
@@ -455,7 +592,7 @@ local T                 = require("ffi/util").template
 -- Uses GitHub REST Tree API for incremental sync with SHA-based manifest.
 -- No git binary needed — pure HTTPS/JSON.
 local SyncNotes = WidgetContainer:extend{
-    name = "aiactions_sync",
+    name = "syncnotes",
     is_doc_only = false,
 
     -- Default local root for synced notes. Portable across devices.
@@ -470,14 +607,14 @@ local SyncNotes = WidgetContainer:extend{
 
 function SyncNotes:init()
     -- Load settings from dedicated file (not G_reader_settings).
-    self.settings_file = DataStorage:getSettingsDir() .. "/aiactions_sync.lua"
+    self.settings_file = DataStorage:getSettingsDir() .. "/syncnotes.lua"
     self.settings = LuaSettings:open(self.settings_file)
 
     self.ui.menu:registerToMainMenu(self)
 end
 
 function SyncNotes:addToMainMenu(menu_items)
-    menu_items.aiactions_sync = {
+    menu_items.syncnotes = {
         text = _("Sync AI-2526 Notes"),
         sorting_hint = "more_tools",
         sub_item_table = {
@@ -569,7 +706,7 @@ function SyncNotes:httpGet(url, pat, extra_headers)
     local response_body = {}
     local headers = {
         ["Authorization"] = "token " .. pat,
-        ["User-Agent"] = "KOReader-aiactions-sync/1.0",
+        ["User-Agent"] = "KOReader-syncnotes/1.0",
         ["Accept"] = "application/vnd.github+json",
     }
     if extra_headers then
@@ -691,7 +828,7 @@ function SyncNotes:executeSync(pat)
             method = "GET",
             headers = {
                 ["Authorization"] = "token " .. pat,
-                ["User-Agent"] = "KOReader-aiactions-sync/1.0",
+                ["User-Agent"] = "KOReader-syncnotes/1.0",
             },
             sink = ltn12.sink.file(out_file),
             timeout = 30,
@@ -741,7 +878,7 @@ return SyncNotes
 ### 7.4 How it works
 
 1. `init()` loads plugin settings from a dedicated `LuaSettings` file
-   (`settings/aiactions_sync.lua`), avoiding pollution of `settings.reader.lua`.
+   (`settings/syncnotes.lua`), avoiding pollution of `settings.reader.lua`.
 2. User invokes *"Sync AI-2526 Notes"* from the tools menu.
 3. If no PAT is saved, `promptForToken()` shows an `InputDialog` with
    `text_type = "password"` — the token is masked on screen.
@@ -789,18 +926,18 @@ in ReaderUI history is a cosmetic concern — the rendered output is identical.
 
 - All 4 aux provider precedents use Option A style (texteditor.koplugin:50,
   archiveviewer.koplugin:42, imageviewer.lua:894, textviewer.lua:915).
-- FileConverter:mdToHtml at `filemanagerconverter.lua:42-56` does the wrapping.
+- FileConverter:mdToHtml at `filemanagerconverter.lua:41-55` does the wrapping.
 
 ### Q2 (Reusing mdToHtml vs calling luamd directly): Which is more maintainable?
 
 **Use FileConverter:mdToHtml.** Its module-level requires do NOT pull in
-FileManager (`filemanagerconverter.lua:1-12` — only ButtonDialog, ConfirmBox,
+FileManager (`filemanagerconverter.lua:5-12` — only ButtonDialog, ConfirmBox,
 UIManager, lfs, logger, util, gettext, ffi/util). This is safe for plugin use.
 See §5.4.
 
 ### Q3 (addAuxProvider callback shape): callback field vs self[provider]:openFile method?
 
-**Both work** — see `filemanager.lua:1619-1621`:
+**Both work** — see `filemanager.lua:1625-1630`:
 
 ```lua
 if provider.callback then -- module
@@ -813,7 +950,7 @@ end
 We recommend the **`callback` field** (module style) because:
 
 - It's self-contained — no dependency on `registerModule` naming.
-- It matches the pattern used by `imageviewer.lua:906` and `textviewer.lua:928`.
+- It matches the pattern used by `imageviewer.lua:901` and `textviewer.lua:922`.
 - See §5.3.
 
 ### Q4 (PAT storage): Best practice for secrets on a FAT e-reader partition?
@@ -825,7 +962,7 @@ mitigate by:
 
 1. Using a **fine-grained read-only PAT** scoped to a single repo.
 2. Entering via password-masked `InputDialog` (`text_type = "password"` at
-   `inputdialog.lua:20,396`).
+   `inputdialog.lua:20,381`).
 3. Providing a **"Clear Token"** menu action.
 4. **Documenting loudly** that the token is stored in cleartext on the device.
 
@@ -837,7 +974,7 @@ There is no KOReader keyring plugin (no precedent). See §5.5.
 `newsdownloader.koplugin:195,430,434`, `wallabag.koplugin`, and
 `exporter.koplugin`. For hundreds of small `.md` files at ~2-20 KB each, total
 sync time is under a minute on WiFi. If measurements later show unacceptable
-blocking, the `ReaderUI:showReaderCoroutine` pattern at `readerui.lua:711-731`
+blocking, the `ReaderUI:showReaderCoroutine` pattern at `readerui.lua:711-736`
 and `plugins/kosync.koplugin/` are references for coroutine chunking. See §5.6.
 
 ### Q6: Should this be one plugin or two?
@@ -848,25 +985,52 @@ and `plugins/kosync.koplugin/` are references for coroutine chunking. See §5.6.
 
 ## 9. Testing & verification plan
 
-### 9.1 Unit tests (via KOReader's busted framework)
+### 9.1 Unit tests
 
-KOReader ships busted; run with `./kodev test front spec/unit/<file>_spec.lua`.
+**⚠️ Updated 2026-07-30 — this section previously described a planned suite run
+under KOReader's `busted` via `./kodev test`. That is not what was built.**
 
-| Test suite | What it tests | How |
-| --- | --- | --- |
-| `sha_manifest_spec.lua` | Manifest diff logic: given local and remote SHA tables, compute download set and delete set | Pure Lua function — no device needed |
-| `path_filter_spec.lua` | Tree-API response filtering: only `type=="blob"` and `.md` suffix | Pure Lua function — no device needed |
-| `html_title_spec.lua` | FileConverter:mdToHtml output title is derived from filename | Call mdToHtml directly from plugin context |
-| `sync_url_encoding_spec.lua` | URL construction: paths with spaces, special chars, nested paths are correctly URI-encoded | Pure Lua check against expected URL format |
+Tests are run from the repository root with:
+
+```bash
+lua run_busted_tests.lua
+```
+
+**`run_busted_tests.lua` is a hand-rolled, dependency-free test runner — it is
+NOT the `busted` framework, despite the filename.** It requires nothing beyond a
+stock Lua interpreter, which is precisely why it works unchanged across every
+interpreter we care about. It auto-discovers `tests/*_spec.lua`.
+
+Current state: **71 tests, all passing**, verified on **Lua 5.1, LuaJIT, and Lua
+5.5**.
+
+| Test file | What it covers |
+| --- | --- |
+| `tests/markdown_interceptor_spec.lua` | Math extraction/substitution: `$`/`$$` detection, the inline-`$` disambiguation rules, code-block and code-span exclusion, blank-line abort (§6.6) |
+| `tests/math_renderer_spec.lua` | Backend facade, djb2 content-addressed cache keys, degradation to monospace source for unsupported constructs |
+| `tests/test_manifest.lua` | SHA-manifest diff: given local and remote SHA tables, compute the download set and the delete set |
+| `tests/test_sync_integration.lua` | Sync flow end-to-end against stubbed HTTP: tree filtering (`type=="blob"` + `.md`), URL construction/encoding, delete pass |
+
+Everything under test is pure Lua with no device dependency — that is a deliberate
+design property, not a coincidence: the network, filesystem, and UI touchpoints
+are kept at the edges of `main.lua` so the logic beneath them stays testable on a
+desktop.
 
 ### 9.2 Emulator testing
 
+**⚠️ Note:** this procedure assumes a local KOReader source checkout for
+`./kodev`. The clone this document was originally written against
+(`~/.repos/koreader`) no longer exists, so the steps below are **not currently
+runnable as written** — re-clone KOReader first if you want the emulator path.
+In practice the loop that was actually used is §9.1 (desktop unit tests) plus
+§9.3 (deploy to the device via `./deploy.sh`).
+
 ```bash
-cd ~/.repos/koreader
+cd ~/.repos/koreader   # requires a KOReader checkout — see note above
 
 # Drop plugins into staging
-ln -s /tmp/kobo-research/markdownreader.koplugin plugins/
-ln -s /tmp/kobo-research/aiactions_sync.koplugin plugins/
+ln -s <kobo-notes>/plugins/markdownreader.koplugin plugins/
+ln -s <kobo-notes>/plugins/syncnotes.koplugin plugins/
 
 # Build and run emulator
 ./kodev run -s=kobo-aura-one
@@ -890,11 +1054,15 @@ In the emulator:
 
 ### 9.3 On-device testing
 
-Copy plugin dirs to `/mnt/kobo/.adds/koreader/plugins/`, restart KOReader, enable.
+Run **`./deploy.sh`** from the repository root — it copies both plugin dirs to
+`/mnt/kobo/.adds/koreader/plugins/`. Then restart KOReader and enable them. Both
+plugins are currently implemented and deployed to the device by this route.
 
 | Test case | Steps | Expected |
 | --- | --- | --- |
 | Formatted open | Tap any `.md` file | Opens with rendered HTML |
+| Math rendering | Open a note containing `$...$` and `$$...$$` | Formulas render as unicode/HTML; unsupported constructs appear as monospace LaTeX (§6.6) |
+| Math never blocks open | Open a note with deliberately malformed LaTeX | Document still opens; math path is `pcall`-wrapped |
 | Sync | Tools → Sync AI-2526 Notes | WiFi connects, notes appear in `notes/AI-2526/` |
 | Incremental | Add a new `.md` to GitHub master, re-sync | Only the new file downloads |
 | Deletion | Delete a `.md` from GitHub master, re-sync | Local copy removed |
@@ -907,15 +1075,17 @@ Copy plugin dirs to `/mnt/kobo/.adds/koreader/plugins/`, restart KOReader, enabl
 
 ```bash
 # Lint our files (the .luacheckrc allows G_reader_settings and G_defaults)
-./kodev check plugins/markdownreader.koplugin/main.lua plugins/aiactions_sync.koplugin/main.lua
+./kodev check plugins/markdownreader.koplugin/*.lua plugins/syncnotes.koplugin/*.lua
 ```
+
+(Same caveat as §9.2: `./kodev` needs a KOReader checkout.)
 
 ### 9.5 Verification of upstream changes
 
-If KOReader is updated past v2025.10, verify:
+If KOReader is updated past v2026.07, verify (this list was last run on 2026-07-30 against v2026.07 — all four still hold):
 
 - `FileConverter:mdToHtml` still exists and signature hasn't changed
-  (`filemanagerconverter.lua:42`)
+  (`filemanagerconverter.lua:41`)
 - `DocumentRegistry:addAuxProvider` still accepts the same table schema
   (`documentregistry.lua:55`)
 - `FileManager:openFile` dispatch logic at `filemanager.lua:1614-1637` unchanged
@@ -929,7 +1099,7 @@ If KOReader is updated past v2025.10, verify:
 | --- | --- |
 | `FileConverter:mdToHtml` changes or moves in future KOReader | We use it directly; if it breaks, fall back to `require("apps/filemanager/lib/md")` + manual wrapper (see §5.4). Pin check in post-update verification |
 | PAT stored in cleartext on FAT partition (no file permissions) | Use read-only fine-grained PAT scoped to AI-2526 only; document this prominently; add "Clear Token" menu action |
-| Long sync blocks UI | Currently in scope for ~hundreds of notes (under a minute). If too slow, adopt coroutine chunking pattern from `readerui.lua:711-731` |
+| Long sync blocks UI | Currently in scope for ~hundreds of notes (under a minute). If too slow, adopt coroutine chunking pattern from `readerui.lua:711-736` |
 | GitHub REST API rate limit (5000 req/h) | Sync uses exactly 1 tree API call; raw downloads are NOT counted against REST rate limits. Limit is irrelevant for our use case |
 | Temp HTML path shows `.html` in history instead of `.md` | Cosmetically acceptable — see §5.1. The rendered output is identical. Filename preserves the original name with `.html` extension |
 | OTA update changes `G_reader_settings` provider default | The provider association is stored in `G_reader_settings.reader.lua` which is preserved across OTA (only tracked `package.index` files are cleaned). If the user resets settings, the plugin's `init()` re-creates the default on next load |
@@ -962,7 +1132,7 @@ Each slice is independently verifiable. Suggested implementation order:
 
 ### Slice 4: Sync plugin skeleton + menu
 
-- Create `aiactions_sync.koplugin/_meta.lua` and `main.lua`.
+- Create `syncnotes.koplugin/_meta.lua` and `main.lua`.
 - Menu entry: "Sync AI-2526 Notes" → `onSyncTriggered()` (stub).
 - **Verify:** Menu item appears.
 
@@ -1002,8 +1172,22 @@ Each slice is independently verifiable. Suggested implementation order:
 - Full UC-1 through UC-4 on the Kobo (see §9.3).
 - Screenshots for acceptance documentation.
 
+### Slice 11: LaTeX math rendering (delivered post-v1)
+
+- `markdown_interceptor.lua` — extract `$`/`$$` spans to tokens before
+  `mdToHtml`, substitute rendered HTML back afterwards.
+- `math_renderer.lua` — backend facade + djb2 content-addressed cache.
+- `math_backend_lua.lua` — pure-Lua LaTeX subset → unicode/HTML.
+- **Verify:** `tests/markdown_interceptor_spec.lua` and
+  `tests/math_renderer_spec.lua` (part of the 71-test suite, §9.1); real-corpus
+  run of 75 files / 4952 formulas / 0 errors. See §6.6.
+
 ### Future (post-v1)
 
+- **Native MicroTeX math backend** — deferred behind the `math_renderer.lua`
+  seam; it needs a cross-compiled C++ library, which objective 3 excludes for
+  now. Design in `docs/microtex_implementation_spec.html`.
+- Detect 4-space-indented code blocks in the math interceptor (known gap, §6.6).
 - Coroutine async for large repos.
 - Optional auto-sync on plugin load (if WiFi is already on).
 - Support for multiple sync configs (e.g., different repos for different courses).
@@ -1018,29 +1202,56 @@ Each slice is independently verifiable. Suggested implementation order:
 | `FileManager:openFile` at line 1551 | line 1614 | `filemanager.lua:1614` |
 | `NetworkMgr:afterWifiAction` at line 605 | line 621 | `manager.lua:621` |
 | `G_reader_settings:readSetting("provider",{})["md"] = "markdownreader"` without save | Must call `G_reader_settings:saveSetting("provider", providers)` then `flush()` | `luasettings.lua:89-96` |
-| "Latest stable = v2026.07" | UNVERIFIED — device is v2025.10; irrelevant to design | Not found in source |
+| "Latest stable = v2026.07" | Was UNVERIFIED (device was v2025.10); **now confirmed** — device runs v2026.07 as of 2026-07-30 | `/mnt/kobo/.adds/koreader/git-rev` |
 | Temp HTML path issue = Option B needed | Acceptable cosmetic; all precedents use temp approach | No Option B precedent exists |
 | `b-md-reader-plugin.txt` uses extension args in addAuxProvider | Wrong; API only accepts 1 table arg | `documentregistry.lua:55` |
 
+### A.1 Second-round corrections (2026-07-30, re-verified against v2026.07)
+
+| Previous claim | Correction | Source |
+| --- | --- | --- |
+| Reference source is `~/.repos/koreader` (HEAD `574fe9f`) | That clone no longer exists. Reference source is now the device tree at `/mnt/kobo/.adds/koreader/` | `ls ~/.repos/koreader` → no such directory |
+| Device runs KOReader v2025.10 | Device runs **v2026.07** | `/mnt/kobo/.adds/koreader/git-rev` |
+| "Latest stable = v2026.07" is UNVERIFIED, recommend deleting | Confirmed true; claim retained | `git-rev` |
+| Sync plugin is `aiactions_sync.koplugin` | It is **`syncnotes.koplugin`** everywhere — repo, device, and its own submodule remote | `.gitmodules`, `plugins/syncnotes.koplugin/` |
+| `FileConverter:mdToHtml` at `filemanagerconverter.lua:42-56` | now **41-55** (`_mdFileToHtml` follows at 56) | device source |
+| `filemanagerconverter.lua:1-12` module requires | requires start at **5** (`5-12`) | device source |
+| `imageviewer.lua:906` (`callback` field) | now **901** | device source |
+| `textviewer.lua:928` (`callback` field) | now **922** | device source |
+| `filemanager.lua:1619-1621` (callback vs plugin dispatch) | now **1625-1630** | device source |
+| Open With dialog at `filemanager.lua:1464` | `showOpenWithDialog` at **1471** | device source |
+| "Reset default for type" at `filemanager.lua:1530-1534` | now **1528-1531** | device source |
+| `readerui.lua:710` forceRePaint (show at 709) | forceRePaint at **718**, `UIManager:show` at **712** | device source |
+| `readerui.lua:711-731` showReaderCoroutine | function starts at 711; body extends to ~**736** | device source |
+| `inputdialog.lua:20,396` for `text_type` | comment at 20; actual field pass-through at **381** | device source |
+| `newsdownloader.koplugin/main.lua:195,430,434` as forceRePaint precedent | **No `forceRePaint` call remains in that plugin.** `runWhenOnline` at 195 still valid. See §5.6 | `rg -n forceRePaint` → no matches |
+| `documentregistry.lua` `getProvider` at 69-92 | `getProvider` at **91**; `hasProvider` occupies 63-90 | device source |
+| Unit tests run via KOReader's `busted` / `./kodev test` | Run via `lua run_busted_tests.lua`, a **hand-rolled runner, not busted**. 71 tests. See §9.1 | repo root |
+
+**Unchanged and re-confirmed at the same line numbers:** `addAuxProvider` (`documentregistry.lua:55`), `setProvider` (210), `getAuxProviders` (182), `FileManager:openFile` (1614), `ReaderUI:showReader` (616), `showReaderCoroutine` (711), `beforeWifiAction` (605), `afterWifiAction` (621), `runWhenOnline` (698), `LuaSettings:readSetting` (89), `DataStorage:getDataDir` (16), `credocument.lua:1609`, `koreader.sh:129`, `md.lua` (533 lines), `texteditor.koplugin:50` (order 30), `archiveviewer.koplugin:42` (order 40), `wallabag.koplugin/main.lua:23` (JSON), `kosync.koplugin/main.lua:26` (settings file), `socketutil.lua:8` (`ssl.https`), pluginloader `_discover` (174) / `_load` (231) / `loadPlugins` (273) / `createPluginInstance` (479).
+
 ## Appendix B: Key source file references
+
+All paths relative to `/mnt/kobo/.adds/koreader/`. Line numbers verified
+2026-07-30 against v2026.07.
 
 | File | Lines | What |
 | --- | --- | --- |
-| `frontend/document/documentregistry.lua` | 55-63, 69-92, 182-190, 210-222 | `addAuxProvider`, `getProvider`, `getAuxProviders`, `setProvider` |
-| `frontend/apps/filemanager/filemanagerconverter.lua` | 42-56 | `FileConverter:mdToHtml` |
-| `frontend/apps/filemanager/filemanager.lua` | 379-426, 1464-1637 | `registerModule`, plugin loading, Open With dialog, `openFile` dispatch |
-| `frontend/apps/reader/readerui.lua` | 616-730, 711-731 | `showReader`, `showReaderCoroutine` |
-| `frontend/ui/network/manager.lua` | 605-621, 698-727, 621 | `beforeWifiAction`, `runWhenOnline`, `afterWifiAction` |
-| `frontend/pluginloader.lua` | 174-293, 479-494 | `_discover`, `_load`, `loadPlugins`, `createPluginInstance` |
+| `frontend/document/documentregistry.lua` | 55-57, 91, 154, 182-192, 210-222 | `addAuxProvider`, `getProvider`, `getAssociatedProviderKey`, `getAuxProviders`, `setProvider` |
+| `frontend/apps/filemanager/filemanagerconverter.lua` | 5-12, 41-55 | module requires; `FileConverter:mdToHtml` |
+| `frontend/apps/filemanager/filemanager.lua` | 379-426, 1471-1637 | `registerModule`, plugin loading (417-426), Open With dialog (1471), `openFile` dispatch (1614-1637) |
+| `frontend/apps/reader/readerui.lua` | 616, 711-736 | `showReader`, `showReaderCoroutine` (with `forceRePaint` at 718) |
+| `frontend/ui/network/manager.lua` | 605, 621, 698-727 | `beforeWifiAction`, `afterWifiAction`, `runWhenOnline` |
+| `frontend/pluginloader.lua` | 174, 231, 273, 479 | `_discover`, `_load`, `loadPlugins`, `createPluginInstance` |
 | `frontend/luasettings.lua` | 89-96 | `readSetting(key, default)` |
-| `datastorage.lua` | 16-62 | `getDataDir`, `getSettingsDir` |
+| `datastorage.lua` | 16, 60 | `getDataDir`, `getSettingsDir` |
 | `frontend/apps/filemanager/lib/md.lua` | 1-533, 508-521 | vendored luamd markdown parser |
-| `plugins/texteditor.koplugin/main.lua` | 43-63 | Precedent: aux provider plugin with order 30 |
+| `plugins/texteditor.koplugin/main.lua` | 50-63 | Precedent: aux provider plugin with order 30 (`isFileTypeSupported` 59, `openFile` 63) |
 | `plugins/archiveviewer.koplugin/main.lua` | 42-62 | Precedent: aux provider plugin with order 40 |
-| `frontend/ui/widget/imageviewer.lua` | 894-906 | Precedent: aux provider module with `callback` and `enabled_func` |
-| `frontend/ui/widget/textviewer.lua` | 915-928 | Precedent: aux provider module with `callback` and `enabled_func` |
-| `plugins/newsdownloader.koplugin/main.lua` | 18-21, 195, 430-434, 513 | Pattern: HTTPS + WiFi + sync with forceRePaint |
-| `plugins/wallabag.koplugin/main.lua` | 23, 34, 652-696 | Pattern: REST API, JSON, LuaSettings |
-| `frontend/document/credocument.lua` | 1607-1621 | `.md` registered as `text/plain` with crengine |
-| `platform/kobo/koreader.sh` | 129 | OTA cleanup leaves user plugins untouched |
+| `frontend/ui/widget/imageviewer.lua` | 894-904 | Precedent: aux provider module — `callback` at 901, `enabled_func` at 898 |
+| `frontend/ui/widget/textviewer.lua` | 915-925 | Precedent: aux provider module — `callback` at 922, `enabled_func` at 919 |
+| `plugins/newsdownloader.koplugin/main.lua` | 195 | Pattern: `NetworkMgr:runWhenOnline` (⚠️ no longer a `forceRePaint` precedent) |
+| `plugins/wallabag.koplugin/main.lua` | 23-24, 156, 883 | Pattern: REST API (`callAPI` at 883), JSON, LuaSettings |
+| `frontend/document/credocument.lua` | 1605-1615 | `.md` registered as `text/plain` with crengine (1609) |
+| `koreader.sh` | 129 | OTA cleanup leaves user plugins untouched (repo path: `platform/kobo/koreader.sh`) |
 | `frontend/ui/widget/inputdialog.lua` | 17-20, 396-401 | Password type support (`text_type = "password"`) |
