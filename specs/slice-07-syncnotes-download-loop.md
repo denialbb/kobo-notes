@@ -1,5 +1,15 @@
 # Slice 7: syncnotes — download loop + WiFi management + full sync
 
+> **Status: IMPLEMENTED — historical record (verified 2026-07-30).**
+> Shipped in `plugins/syncnotes.koplugin/main.lua` (`httpGet`, `startSync`,
+> `executeSync`); integration test in `tests/test_sync_integration.lua`.
+> This is a record of how the work was sliced, not pending work.
+> Divergences: progress is a custom `SyncProgressDialog` (progress bar, repaints
+> throttled to 150ms to avoid e-ink flicker) rather than repeated InfoMessages;
+> downloads are buffered with `ltn12.sink.table` and then written, not streamed
+> with `ltn12.sink.file`; paths are escaped with `util.urlEncode`; and
+> `getNotesDir()` uses the configurable `notes_root` setting.
+
 Depends on: Slices 4, 5, 6 (skeleton + PAT/config + manifest logic)
 
 ## Goal
