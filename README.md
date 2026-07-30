@@ -168,6 +168,7 @@ else.
 | --- | --- |
 | `docs/DESIGN_final.md` | **Authoritative design.** Citations re-verified against v2026.07. |
 | `docs/microtex_implementation_spec.html` | Math pipeline design + deferred native backend |
+| `docs/math-rendering-strategy.md` | Why rendering stays pure Lua, with corpus measurements |
 | `specs/slice-*.md` | Historical TDD slices — a record of how the work was split |
 | `docs/PROJECT_OVERVIEW.md` | ⚠️ Superseded early draft, kept for history |
 | `docs/research-*.txt` | Background research reports |
