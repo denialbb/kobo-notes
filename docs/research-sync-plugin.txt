@@ -1,0 +1,356 @@
+================================================================================
+KOBO ON-DEVICE NOTES SYNC RESEARCH REPORT
+================================================================================
+Target Device: Kobo E-reader
+OS Runtime: KOReader v2025.10 (Linux/ARM, no native git binary)
+Local Artifacts: ARM dbclient (Dropbear), sftp-server at /mnt/kobo/.adds/koreader/
+Lua Networking: socket.http, ssl.https (LuaSec/libssl), json (rapidjson)
+Target Repository: Private GitHub Repo (git@github.com:denialbb/AI-2526.git, branch master)
+Target Local Directory: /mnt/onboard/notes/AI-2526/
+================================================================================
+
+1. COMPARISON OF THREE CONCRETE APPROACHES
+
+APPROACH 1: GitHub REST API over HTTPS via KOReader koplugin (Lua-only)
+--------------------------------------------------------------------------------
+* Mechanics:
+  1. Retrieve Repository File Tree:
+     Perform a GET request to:
+     GET https://api.github.com/repos/denialbb/AI-2526/git/trees/master?recursive=1
+     Headers:
+       Authorization: Bearer <PAT>
+       Accept: application/vnd.github.v3+json
+       User-Agent: KOReader-Sync-Plugin
+  2. Parse JSON Response:
+     Decode the response payload using KOReader's JSON library to extract files, paths, and SHA-1 hashes.
+  3. Incremental Download:
+     Compare remote file paths and their SHA-1 hashes against a local manifest file (`.sync_manifest.json`). Download files where the SHA-1 has changed or the file is missing locally.
+     GET https://raw.githubusercontent.com/denialbb/AI-2526/master/<path>
+     Headers:
+       Authorization: token <PAT>
+  4. Stream Downloads:
+     Stream the incoming raw content directly to disk using `ltn12.sink.file` to prevent buffering large files in RAM.
+  5. Delete Removed Files:
+     Delete any local file in `/mnt/onboard/notes/AI-2526/` that is not present in the remote git tree.
+* Token Storage:
+  - Stored inside KOReader's global settings database `G_reader_settings` (stored in `settings.reader.lua`) under a custom namespace key like `sync_ai2526_pat`.
+  - Configured interactively on-device using a native `InputDialog` widget when no token is present.
+* Deletion of Removed Files:
+  - During the tree comparison step, the plugin builds a set of remote paths.
+  - It iterates over the keys of the local manifest file (representing previously synced files).
+  - Any path in the local manifest that is not present in the remote tree is deleted via `os.remove(full_path)`.
+* Incremental Sync:
+  - Managed by keeping a local JSON manifest mapping relative file paths to their Git SHA-1 hashes.
+  - Using the Git SHA-1 is extremely robust because it is computed by GitHub and returned directly in the Tree API, eliminating the need to download file content or rely on volatile filesystem modification times (mtime).
+* Rate Limits:
+  - Authenticated GitHub REST API requests are limited to 5,000 requests per hour.
+  - Since the repository file structure is fetched recursively in a single API call, the plugin uses exactly 1 tree API call per sync.
+  - Raw file downloads from `raw.githubusercontent.com` are not counted against the REST API rate limits, ensuring rate limits are practically never hit.
+* Lua HTTP/HTTPS Implementation:
+  - KOReader provides `socket.http` and `ssl.https` (LuaSec wrapping OpenSSL).
+  - The plugin requests HTTPS connections by requiring `ssl.https` and passing standard request tables.
+
+APPROACH 2: SSH Jump-Host with dropbear dbclient
+--------------------------------------------------------------------------------
+* Mechanics:
+  1. Rely on the Kobo's bundled `dbclient` (Dropbear SSH client) located inside the KOReader directory structure.
+  2. Execute a background shell script on the Kobo (using `os.execute` or via the `terminal.koplugin` runner).
+  3. The script initiates an SSH connection to a local jump-host/laptop that is on the same local network:
+     `dbclient -i ~/.ssh/id_rsa user@jump-host "cd /path/to/repo && git pull"`
+  4. Once updated, the script pulls the updated files to the Kobo using `scp` or `sftp-server` over the SSH tunnel.
+* Pros:
+  - Offloads Git history overhead, merge conflict resolution, and credential validation to the jump-host.
+  - Uses standard, cryptographically secure SSH key-based authentication.
+* Cons:
+  - Hard dependency on a local jump-host (laptop/server) that must remain powered on, configured with an SSH server, and accessible on the local network.
+  - Completely fails to sync if traveling or away from the local network unless complex VPN configurations (e.g. WireGuard/Tailscale) are compiled for the Kobo.
+  - Complex configuration for the end-user (generating SSH keys on Kobo, copying to jump-host, mapping network addresses).
+  - Lacks native UI progress bars; error troubleshooting requires parsing raw terminal output.
+
+APPROACH 3: Cross-Compile Static Git for Kobo ARM
+--------------------------------------------------------------------------------
+* Mechanics:
+  1. Set up a cross-compilation toolchain targeting Kobo's ARM architecture.
+  2. Compile a fully static version of the `git` binary and its auxiliary helpers (e.g. `git-remote-http`, `git-credential-store`).
+  3. Statically link libc (musl/glibc), OpenSSL, zlib, and libcurl to support HTTPS transfers.
+  4. Place the binaries in `/mnt/kobo/.adds/koreader/bin/` and invoke `git pull` from `/mnt/onboard/notes/AI-2526/` using `os.execute`.
+* Pros:
+  - Provides a complete Git implementation on-device, supporting local changes, history, merging, and automatic branch tracking.
+* Cons:
+  - Extreme build complexity: cross-compiling static Git with full HTTPS support requires resolving deep and fragile dependency chains (libcurl -> OpenSSL -> zlib).
+  - Enormous binary size: static compilation results in binaries totaling tens of megabytes, which is heavy for e-reader storage.
+  - High risk of Out-of-Memory (OOM) crashes: Kobo devices have limited RAM, and Git operations (specifically pack-file unpacking and delta resolution) are highly memory-intensive.
+  - UI Blocking: Running a subprocess synchronously blocks the KOReader main thread, causing the interface to freeze until the operation completes.
+
+--------------------------------------------------------------------------------
+COMPARATIVE ANALYSIS MATRIX
+--------------------------------------------------------------------------------
+Metric                  | Approach 1 (API)      | Approach 2 (SSH)      | Approach 3 (Git)
+------------------------+-----------------------+-----------------------+-----------------------
+Complexity              | Low                   | Medium                | High
+Dependencies            | None (uses LuaSec)    | Local SSH Jump-Host   | Cross-compiled ARM Git
+Reliability & Stability | High                  | Medium (Host online?) | Low (OOM risk)
+Sync Location           | Anywhere (Wi-Fi)      | Local LAN/VPN Only    | Anywhere (Wi-Fi)
+Memory Footprint        | Very Low (~1-2 MB)    | Low (~5 MB)           | High (Up to 100 MB+)
+UI Integration          | Native (Dialogs)      | Poor (CLI)            | Poor (CLI)
+
+================================================================================
+2. RECOMMENDATION & CRITICAL EVALUATION
+================================================================================
+RECOMMENDED APPROACH: Approach 1 (GitHub REST API over HTTPS via KOReader koplugin)
+
+CRITICAL RATIONALE:
+Approach 1 is the cleanest and most robust way to sync notes on a Kobo. 
+- It has ZERO binary dependencies and requires no compilation. It leverages KOReader's existing LuaJIT runtime, socket libraries, and LuaSec binding, meaning it is guaranteed to run across KOReader versions without library version mismatches.
+- It operates completely on-device and connects directly to GitHub. This makes the Kobo autonomous, enabling sync anywhere there is a Wi-Fi connection.
+- It is highly resource-efficient. Memory footprint is restricted to the JSON parser and file stream buffers, eliminating OOM crashes that plague on-device Git.
+
+CRITICAL DESIGN NOTE ON SECURITY & ROBUSTNESS:
+1. Wi-Fi Handling: Kobo aggressively disconnects Wi-Fi to save battery. The plugin must wrap the sync loop inside KOReader's `NetworkMgr:runWhenOnline()`, which automatically prompts the user to enable Wi-Fi if offline and schedules execution once connected.
+2. Blocking I/O: LuaSocket and LuaSec requests are synchronous. A large file download will block the main UI thread. While we update progress via an `InfoMessage` widget, we must stream files in chunks using LTN12 sinks to minimize memory load and keep the duration short.
+3. Plaintext Credentials: KOReader stores its configuration in plaintext (`settings.reader.lua`). To mitigate security risks, the user must use a fine-grained Personal Access Token (PAT) restricted strictly to read-only access for the `AI-2526` repository contents.
+
+================================================================================
+3. CONCRETE PLUGIN DESIGN (sync_ai2526.koplugin)
+================================================================================
+
+DIRECTORY STRUCTURE:
+/mnt/kobo/.adds/koreader/plugins/sync_ai2526.koplugin/
+├── _meta.lua
+└── main.lua
+
+--------------------------------------------------------------------------------
+_META.LUA
+--------------------------------------------------------------------------------
+```lua
+local _ = require("gettext")
+return {
+    name = "sync_ai2526",
+    fullname = _("Sync AI-2526 Notes"),
+    description = _("Syncs markdown notes from git@github.com:denialbb/AI-2526.git master branch."),
+}
+```
+
+--------------------------------------------------------------------------------
+MAIN.LUA
+--------------------------------------------------------------------------------
+```lua
+local WidgetContainer = require("ui/widget/container")
+local UIManager = require("ui/uimanager")
+local InfoMessage = require("ui/widget/infomessage")
+local InputDialog = require("ui/widget/inputdialog")
+local NetworkMgr = require("ui/network/manager")
+local json = require("json") -- KOReader bundled JSON module
+local https = require("ssl.https")
+local ltn12 = require("ltn12")
+local _ = require("gettext")
+
+local SyncNotes = WidgetContainer:extend{
+    name = "sync_notes",
+    data_dir = "/mnt/onboard/notes/AI-2526/",
+    manifest_path = "/mnt/onboard/notes/AI-2526/.sync_manifest.json",
+}
+
+function SyncNotes:init()
+    self.ui.menu:registerToMainMenu(self)
+end
+
+function SyncNotes:addToMainMenu(menu_items)
+    menu_items.sync_notes = {
+        text = _("Sync AI-2526 notes"),
+        sorting_hint = "more_tools",
+        callback = function()
+            self:onSyncTriggered()
+        end,
+    }
+end
+
+function SyncNotes:onSyncTriggered()
+    local pat = G_reader_settings:readSetting("sync_ai2526_pat")
+    if not pat or pat == "" then
+        self:promptForToken()
+    else
+        self:startSync(pat)
+    end
+end
+
+function SyncNotes:promptForToken()
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Enter GitHub Personal Access Token"),
+        input = "",
+        buttons = {
+            {
+                text = _("Cancel"),
+                id = "close",
+                callback = function()
+                    UIManager:close(dialog)
+                end
+            },
+            {
+                text = _("Save"),
+                is_enter_default = true,
+                callback = function(text)
+                    if text and text ~= "" then
+                        G_reader_settings:saveSetting("sync_ai2526_pat", text)
+                        UIManager:close(dialog)
+                        self:startSync(text)
+                    end
+                end
+            }
+        }
+    }
+    UIManager:show(dialog)
+end
+
+function SyncNotes:startSync(pat)
+    NetworkMgr:runWhenOnline(function()
+        self:executeSync(pat)
+    end)
+end
+
+-- Helper for HTTP GET requests
+function SyncNotes:httpGet(url, pat, headers_extra)
+    local response_body = {}
+    local headers = {
+        ["Authorization"] = "token " .. pat,
+        ["User-Agent"] = "KOReader-Sync-Plugin",
+    }
+    if headers_extra then
+        for k, v in pairs(headers_extra) do
+            headers[k] = v
+        end
+    end
+    
+    local res, code, headers_resp, status = https.request{
+        url = url,
+        method = "GET",
+        headers = headers,
+        sink = ltn12.sink.table(response_body),
+    }
+    return res, code, table.concat(response_body)
+end
+
+function SyncNotes:executeSync(pat)
+    local progress = InfoMessage:new{ text = _("Fetching repository tree..."), timeout = 0 }
+    UIManager:show(progress)
+    
+    -- 1. Fetch remote Git Tree recursively
+    local tree_url = "https://api.github.com/repos/denialbb/AI-2526/git/trees/master?recursive=1"
+    local res, code, body = self:httpGet(tree_url, pat, {["Accept"] = "application/vnd.github.v3+json"})
+    
+    if code ~= 200 then
+        progress:setText(_("Error fetching tree: HTTP " .. tostring(code)))
+        progress.timeout = 5
+        return
+    end
+    
+    local ok, data = pcall(json.decode, body)
+    if not ok or not data or not data.tree then
+        progress:setText(_("Failed to parse remote Git tree JSON"))
+        progress.timeout = 5
+        return
+    end
+    
+    -- Ensure target notes directory exists
+    os.execute("mkdir -p " .. self.data_dir)
+    
+    -- 2. Read local manifest
+    local local_manifest = {}
+    local manifest_file = io.open(self.manifest_path, "r")
+    if manifest_file then
+        local m_content = manifest_file:read("*a")
+        manifest_file:close()
+        pcall(function() local_manifest = json.decode(m_content) end)
+    end
+    
+    local remote_manifest = {}
+    local downloads_required = {}
+    
+    -- 3. Parse remote tree: identify new/changed Markdown files
+    for _, item in ipairs(data.tree) do
+        if item.type == "blob" and item.path:match("%.md$") then
+            remote_manifest[item.path] = item.sha
+            if local_manifest[item.path] ~= item.sha then
+                table.insert(downloads_required, item)
+            end
+        end
+    end
+    
+    -- 4. Download new/modified files
+    local total = #downloads_required
+    for idx, item in ipairs(downloads_required) do
+        progress:setText(string.format(_("Downloading (%d/%d): %s"), idx, total, item.path))
+        
+        local file_url = "https://raw.githubusercontent.com/denialbb/AI-2526/master/" .. item.path
+        local local_path = self.data_dir .. item.path
+        
+        -- Handle subdirectories creation
+        local parent_dir = local_path:match("(.+)/[^/]+$")
+        if parent_dir then
+            os.execute("mkdir -p " .. parent_dir)
+        end
+        
+        -- Download raw file directly to disk sink
+        local out_file = io.open(local_path, "wb")
+        if out_file then
+            local headers = {
+                ["Authorization"] = "token " .. pat,
+                ["User-Agent"] = "KOReader-Sync-Plugin",
+            }
+            local success, http_code = https.request{
+                url = file_url,
+                method = "GET",
+                headers = headers,
+                sink = ltn12.sink.file(out_file),
+            }
+            out_file:close()
+            
+            if not success or http_code ~= 200 then
+                progress:setText(string.format(_("Error downloading %s: HTTP %s"), item.path, tostring(http_code)))
+                progress.timeout = 5
+                return
+            end
+        else
+            progress:setText(_("Unable to create local file: " .. local_path))
+            progress.timeout = 5
+            return
+        end
+    end
+    
+    -- 5. Delete files locally that have been removed on GitHub
+    local deleted_count = 0
+    for local_path_rel, _ in pairs(local_manifest) do
+        if not remote_manifest[local_path_rel] then
+            local full_path = self.data_dir .. local_path_rel
+            os.remove(full_path)
+            deleted_count = deleted_count + 1
+        end
+    end
+    
+    -- 6. Save updated manifest
+    local m_file = io.open(self.manifest_path, "w")
+    if m_file then
+        m_file:write(json.encode(remote_manifest))
+        m_file:close()
+    end
+    
+    -- 7. Sync completed successfully
+    progress:setText(string.format(_("Sync Complete!\nDownloaded: %d, Deleted: %d"), total, deleted_count))
+    progress.timeout = 5
+end
+
+return SyncNotes
+```
+
+================================================================================
+4. CITATIONS & REFERENCES
+================================================================================
+- GitHub Git Trees API: https://docs.github.com/en/rest/git/trees#get-a-tree
+- GitHub Contents API (for raw download authentication on private repositories): https://docs.github.com/en/rest/repos/contents#get-repository-content
+- KOReader Menu Registration Callback pattern: `plugins/hello.koplugin/main.lua`
+- KOReader Network connection and Wi-Fi scheduling helper: `frontend/ui/network/manager.lua` (see `NetworkMgr:runWhenOnline`)
+- KOReader Settings persistence: `frontend/device/luasettings.lua` (see `G_reader_settings:readSetting` / `saveSetting`)
+- KOReader User Interfaces widgets: `frontend/ui/widget/infomessage.lua` and `frontend/ui/widget/inputdialog.lua`
+- KOReader WebDAV interface utilizing luasocket + ltn12: `frontend/apps/cloudstorage/webdavapi.lua`
+================================================================================

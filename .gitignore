@@ -1,0 +1,11 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+*.swp
+*.swo
+
+# KOReader installed build reference (not ours)
+/mnt/

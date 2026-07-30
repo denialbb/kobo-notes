@@ -1,0 +1,371 @@
+# KOReader Development Best Practices & Target Integration Report
+
+This report provides a comprehensive guide to developing on and for KOReader, with specific focus on building and running the emulator, cross-compiling for Kobo devices, the OTA update architecture, plugin structure, and best-practice patterns.
+
+---
+
+## 1. KOReader Development Workflow & Emulator Setup
+
+### Staging & Build Orchestration
+The main entry point for build control is the root [Makefile](file:///home/denial/.repos/koreader/Makefile) and the developer wrapper script `./kodev`. 
+When building or running, the build system staging output is directed to a target-specific directory. For the desktop emulator, this is `koreader-emulator-<arch>` (e.g., `koreader-emulator-x86_64`). Inside this folder, a complete self-contained staging folder named `koreader/` is constructed.
+The `Makefile` targets link or copy the necessary core files:
+* Frontend Lua scripts: [reader.lua](file:///home/denial/.repos/koreader/reader.lua), [setupkoenv.lua](file:///home/denial/.repos/koreader/setupkoenv.lua), and directories like [frontend/](file:///home/denial/.repos/koreader/frontend) and [resources/](file:///home/denial/.repos/koreader/resources).
+* Submodules: compiled native assets from the `koreader-base` submodule (in the `base/` directory) are linked into the staging root.
+
+### Running the Desktop Emulator
+You do not need an e-reader to develop or debug plugins. You can run the emulator directly on Linux or macOS:
+* **Build and Run:** Run `./kodev run` from the root directory. This bootstraps dependencies, compiles necessary C components, links frontend scripts into staging, and launches the emulator.
+* **Run Existing Build:** Skip the build verification phase using the `-b` or `--no-build` flag:
+  ```bash
+  ./kodev run -b
+  ```
+* **Simulating Devices:** You can simulate screen properties (dimensions, orientation, and DPI) for specific e-readers:
+  ```bash
+  ./kodev run -s=kobo-aura-one
+  ./kodev run -s=kindle-paperwhite
+  ```
+  Alternatively, specify manual dimensions and DPI:
+  ```bash
+  ./kodev run -W=1080 -H=1440 -D=300
+  ```
+* **Debugging wrappers:** You can run the emulator under GDB, valgrind, or callgrind automatically:
+  ```bash
+  ./kodev run --gdb
+  ./kodev run --valgrind
+  ```
+
+### Unit Tests with Busted
+KOReader uses the **Busted** unit testing framework for Lua.
+* **Running All Tests:** Run `./kodev test` (triggers all base and frontend specs).
+* **Running Frontend Unit Tests:**
+  ```bash
+  ./kodev test front
+  ```
+* **Running a Single Spec File:** Specify the spec filename or pattern as an argument to target the specific test file:
+  ```bash
+  ./kodev test front spec/unit/datetime_spec.lua
+  ```
+* **Coverage Analysis:** Run `./kodev cov` to run frontend tests with `luacov` and output coverage metrics.
+
+### Luacheck & Linter Configuration
+Static analysis is handled via the linter configuration in [.luacheckrc](file:///home/denial/.repos/koreader/.luacheckrc).
+* **Global Scope Registration:** KOReader utilizes several custom global modules and variables. The configuration registers `G_reader_settings` and `G_defaults` as valid global tables, and defines standard testing mocks (like `load_plugin`, `screenshot`, etc.) for tests under `spec/unit/*`.
+* **Execution:** Run linter checks across the codebase using:
+  ```bash
+  ./kodev check
+  ```
+
+### Plugin Structure & Custom Exemplar
+A KOReader plugin resides in its own directory ending with `.koplugin` under `plugins/` (or user plugins path). It requires at least two files:
+1. **`_meta.lua`**: Returns a table defining the plugin's metadata.
+2. **`main.lua`**: Evaluates to the plugin's main Lua widget, extending [WidgetContainer](file:///home/denial/.repos/koreader/frontend/ui/widget/container/widgetcontainer.lua).
+
+#### Practical Example: `markdown_sync.koplugin`
+Below is a runnable implementation of a custom sync plugin that integrates into the reader's tools menu, utilizes local storage, triggers network connections safely, and displays messages.
+
+**`plugins/markdown_sync.koplugin/_meta.lua`**
+```lua
+local _ = require("gettext")
+return {
+    fullname = _("Markdown Sync"),
+    description = _("Syncs and renders markdown documents from a local path or server."),
+}
+```
+
+**`plugins/markdown_sync.koplugin/main.lua`**
+```lua
+local Dispatcher = require("dispatcher")
+local InfoMessage = require("ui/widget/infomessage")
+local UIManager = require("ui/uimanager")
+local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local LuaSettings = require("luasettings")
+local DataStorage = require("datastorage")
+local NetworkMgr = require("ui/network/manager")
+local _ = require("gettext")
+
+local MarkdownSync = WidgetContainer:extend{
+    name = "markdown_sync",
+    is_doc_only = false,
+}
+
+function MarkdownSync:onDispatcherRegisterActions()
+    Dispatcher:registerAction("markdown_sync_now", {
+        category = "none",
+        event = "MarkdownSyncNow",
+        title = _("Sync Markdown Documents"),
+        general = true,
+    })
+end
+
+function MarkdownSync:init()
+    self:onDispatcherRegisterActions()
+    
+    -- Load settings
+    self.settings_file = DataStorage:getSettingsDir() .. "/markdown_sync.lua"
+    self.settings = LuaSettings:open(self.settings_file)
+    self.sync_url = self.settings:readSetting("sync_url", "http://example.com/notes.md")
+    
+    -- Register to Reader and FileManager menus
+    self.ui.menu:registerToMainMenu(self)
+end
+
+function MarkdownSync:addToMainMenu(menu_items)
+    menu_items.markdown_sync = {
+        text = _("Markdown Sync"),
+        sorting_hint = "tools",
+        sub_item_table = {
+            {
+                text = _("Sync Now"),
+                callback = function()
+                    self:syncNow()
+                end,
+            },
+            {
+                text = _("Configure URL"),
+                callback = function()
+                    self:configureURL()
+                end,
+            }
+        }
+    }
+end
+
+function MarkdownSync:syncNow()
+    local info = InfoMessage:new{ text = _("Connecting for sync...") }
+    UIManager:show(info)
+    UIManager:forceRePaint()
+    
+    -- Request network safely without crashing if WiFi is off
+    NetworkMgr:runWhenOnline(function()
+        UIManager:close(info)
+        info = InfoMessage:new{ text = _("Downloading markdown notes...") }
+        UIManager:show(info)
+        UIManager:forceRePaint()
+        
+        local http = require("socket.http")
+        local ltn12 = require("ltn12")
+        local target_path = DataStorage:getDataDir() .. "/shared_notes.md"
+        local response_body = {}
+        
+        local code, headers, status = http.request{
+            url = self.sync_url,
+            sink = ltn12.sink.table(response_body),
+            timeout = 10,
+        }
+        
+        UIManager:close(info)
+        
+        if code == 200 then
+            local file = io.open(target_path, "w")
+            if file then
+                file:write(table.concat(response_body))
+                file:close()
+                UIManager:show(InfoMessage:new{
+                    text = _("Sync successful! Saved to shared_notes.md"),
+                    timeout = 3,
+                })
+            else
+                UIManager:show(InfoMessage:new{
+                    text = _("Failed to save local file."),
+                    timeout = 3,
+                })
+            end
+        else
+            UIManager:show(InfoMessage:new{
+                text = _("Sync failed: ") .. tostring(status or code),
+                timeout = 3,
+            })
+        end
+        -- Restore wifi state to default to save battery
+        NetworkMgr:afterWifiAction()
+    end)
+end
+
+function MarkdownSync:configureURL()
+    local InputDialog = require("ui/widget/inputdialog")
+    local url_dialog
+    url_dialog = InputDialog:new{
+        title = _("Enter Sync URL"),
+        input = self.sync_url,
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    callback = function()
+                        UIManager:close(url_dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    callback = function()
+                        local new_url = url_dialog:getInputValue()
+                        if new_url and new_url ~= "" then
+                            self.sync_url = new_url
+                            self.settings:saveSetting("sync_url", new_url)
+                            self.settings:flush()
+                            UIManager:close(url_dialog)
+                            UIManager:show(InfoMessage:new{ text = _("URL Saved!"), timeout = 1 })
+                        end
+                    end,
+                }
+            }
+        }
+    }
+    UIManager:show(url_dialog)
+end
+
+function MarkdownSync:onMarkdownSyncNow()
+    self:syncNow()
+end
+
+return MarkdownSync
+```
+
+To develop and test this plugin locally:
+1. Create a directory named `markdown_sync.koplugin` inside `~/.repos/koreader/plugins/`.
+2. Save the `_meta.lua` and `main.lua` files above into that directory.
+3. Start the emulator using `./kodev run`.
+4. Go to the top menu -> **Tools (Wrench/Screwdriver icon)** -> **Plugin management** -> **User plugins**.
+5. Enable **Markdown Sync** (requires a restart prompt which you should accept).
+6. Upon restart, open any document, tap the top menu -> **Tools** -> **Markdown Sync** to trigger settings or sync.
+
+---
+
+## 2. Building KOReader for Kobo from Source
+
+### Targets & Toolchains
+KOReader target building is controlled by targets mapped in the root [Makefile](file:///home/denial/.repos/koreader/Makefile) and platform files under [make/](file:///home/denial/.repos/koreader/make). 
+* The Kobo target configuration is specified in [make/kobo.mk](file:///home/denial/.repos/koreader/make/kobo.mk).
+* Targets like `kobov4` and `kobov5` include `make/kobo.mk` but set specific architecture/compiler flags depending on the Kobo firmware generation (e.g. `kobov5` targets modern Kobos running Firmware 5.x, which feature changed system directories and hardware nodes).
+* **Cross-Compilation:** To compile KOReader for Kobo's ARM architecture, developers must utilize [koxtoolchain](https://github.com/koreader/koxtoolchain), which uses `crosstool-ng` to construct GCC cross-compilers matching the target device's C library (Glibc version). Using a standard system toolchain (like Linaro ARM) is highly discouraged as it often leads to version mismatches or runtime segmentation faults.
+
+### Compiling and Package Generation
+To compile and generate release artifacts, run:
+```bash
+./kodev release kobo     # Standard Kobo build
+./kodev release kobov5   # Target Kobo FW 5.x
+```
+* **Compilation Time & Dependencies:** A scratch build of `koreader-base` (which compiles MuPDF, Crengine, SQLite, OpenSSL, curl, FreeType, HarfBuzz, and LuaJIT from source) can take anywhere from 30 minutes to 2 hours depending on the CPU core count. The system dependencies include common build essentials plus `nasm`, `ninja-build`, `meson`, `cmake`, `gettext`, and `libtool`. Running with `ccache` is highly recommended to speed up incremental builds.
+* **Artifacts Produced:**
+  * `koreader-kobo-<version>.zip`: The manual installation package containing Kobo launching scripts and the root `.adds/koreader` folder.
+  * `koreader-kobo-<version>.tar.xz`: The modern OTA package target.
+  * `koreader-kobo-<version>.targz`: The older compression format OTA target.
+
+### Is Building Necessary for Plugins?
+**No.** KOReader plugins are written in pure Lua and are interpreted dynamically at runtime. You do not need to compile KOReader or set up cross-compilation toolchains to write or distribute a plugin. You can simply drag-and-drop your plugin's folder (e.g., `myplugin.koplugin/`) directly into the `.adds/koreader/plugins/` directory on an existing Kobo installation via USB or SSH, and restart KOReader.
+
+---
+
+## 3. Updating KOReader on Kobo
+
+### Built-in OTA Updater (`otamanager.lua`)
+KOReader features a highly efficient OTA update system implemented in [frontend/ui/otamanager.lua](file:///home/denial/.repos/koreader/frontend/ui/otamanager.lua).
+* **Update Channels:** Users can choose between `stable` and `nightly` (referred to as "Development" in the UI).
+* **Update Servers:** The default server is `http://ota.koreader.rocks/`, but several mirrors (e.g., `http://koreader-fr.ak-team.com/`, `http://koreader-pl.ak-team.com/`) are available.
+* **Menu Path:** Top Menu -> **Gear Icon (Settings)** -> **Device** (or **Navigation**) -> **Update** (or **Check for updates** / **Settings** -> **Update channel**).
+* **Zsync Delta Downloading:** To avoid downloading the entire ~85MB archive every time, the updater uses the `zsync2` tool.
+  1. The server hosts a zsync file (e.g., `koreader-kobo-latest-stable.zsync`).
+  2. The local updater runs `_buildLocalPackage()`, which creates an archive of the currently installed files (`koreader.installed.tar`) based on the manifest file `ota/package.index`.
+  3. `zsync2` compares the local tar seed against the remote zsync metadata, determines which blocks have changed, downloads only the differences, and merges them to output `ota/koreader.updated.tar`. This saves massive bandwidth.
+
+### Execution Loop (In-Place Update with Visuals)
+When the user clicks "Install" or restarts KOReader after the download is ready:
+1. `otamanager.lua` calls `UIManager:quit(85)`. The exit code `85` (`KO_RC_RESTART`) signals a request to restart.
+2. The Kobo startup script [platform/kobo/koreader.sh](file:///home/denial/.repos/koreader/platform/kobo/koreader.sh) intercepts this exit code and executes the shell function `ko_update_check()`.
+3. If `ota/koreader.updated.tar` exists, it triggers extraction:
+   * It starts the `fbink` framebuffer printing utility in daemon mode to display progress directly on the e-ink screen.
+   * It extracts the updated tarball in-place over the current KOReader installation folder:
+     ```bash
+     ./tar xf "ota/koreader.updated.tar" --strip-components=1 --no-same-permissions ... --checkpoint="${CPOINTS}" --checkpoint-action=exec='printf "%s" ... > /tmp/koreader.fbink'
+     ```
+   * The checkpoint progress writes to the fbink named pipe, rendering a smooth progress bar.
+4. After extraction, it compares the old manifest against the new manifest and cleans up deleted files using:
+   ```bash
+   (cd "${UNPACK_DIR}" && grep -xvFf "${KOREADER_DIR}/ota/package.index" /tmp/package.index | xargs -r rm -vf)
+   ```
+5. It moves `koreader.updated.tar` to `koreader.installed.tar` to act as the seed for the next update and re-launches KOReader.
+
+### What is Preserved?
+* **Preserved:** All user settings (including `settings.reader.lua` in the `settings/` directory), reading history, user annotations/highlights, downloaded dictionaries, and **user-installed custom plugins in `plugins/`** are completely preserved. The cleanup command only deletes files that were explicitly tracked in the previous official build's `package.index`.
+* **Latest Stable Version:** The latest stable version on the OTA server is **v2026.07** (with target filename `koreader-kobo-v2026.07.targz`).
+
+---
+
+## 4. Community/Third-Party Plugin Distribution & Installation
+
+### Distribution & Installation
+* **Folder Location:** Users install third-party plugins by extracting the files to `/mnt/kobo/.adds/koreader/plugins/<name>.koplugin/` via USB or SSH.
+* **Auto-Discovery:** On startup, the [PluginLoader](file:///home/denial/.repos/koreader/frontend/pluginloader.lua) discovers the folder. A directory is recognized if its name matches `*.koplugin`, and it contains both `main.lua` and `_meta.lua`.
+* **Enabling/Disabling:** By default, discovered user plugins are loaded automatically. Users can toggle the status in:
+  * **FileManager / Reader Settings -> Tools (Wrench/Screwdriver icon) -> Plugin management -> User plugins**.
+  * Enabling/disabling writes to the user settings file `settings.reader.lua` under the `plugins_disabled` table:
+    ```lua
+    ["plugins_disabled"] = {
+        ["hello"] = true,
+        ["somethingsync"] = true,
+    }
+    ```
+  * Toggling a plugin triggers a prompt to restart KOReader to load or unload the Lua modules.
+* **Updating:** User-installed third-party plugins are **not** updated by the main KOReader OTA update system. Users must update them manually by replacing the plugin folder via USB or using custom sync mechanisms inside the plugin.
+
+---
+
+## 5. Maintenance Burden & Best Practices
+
+### API Stability
+KOReader does not maintain a strict stable API contract for external plugins. If internal modules (like `UIManager`, `ReaderMenu`, or document structures) are refactored, built-in plugins are updated in the same pull-request, but external plugins will break. To minimize maintenance burden, avoid using internal/undocumented modules and rely on the core classes.
+
+### Accessing Settings & Directories
+* **Global Settings:** Access the main settings file `settings.reader.lua` using the global `G_reader_settings` table:
+  ```lua
+  local val = G_reader_settings:readSetting("my_key", default_val)
+  G_reader_settings:saveSetting("my_key", new_val)
+  ```
+* **User Directories:** Always use [datastorage.lua](file:///home/denial/.repos/koreader/datastorage.lua) to locate folders:
+  ```lua
+  local DataStorage = require("datastorage")
+  local root_dir = DataStorage:getDataDir()      -- e.g. /mnt/kobo/.adds/koreader
+  local settings_dir = DataStorage:getSettingsDir() -- e.g. /mnt/kobo/.adds/koreader/settings
+  ```
+
+### Persisting Plugin Settings (Best Practice)
+Do not pollute `settings.reader.lua` with massive plugin configurations. Instead, use the [luasettings.lua](file:///home/denial/.repos/koreader/frontend/luasettings.lua) class to manage a dedicated configuration file:
+```lua
+local LuaSettings = require("luasettings")
+local DataStorage = require("datastorage")
+
+local my_settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/my_plugin.lua")
+-- Read
+local value = my_settings:readSetting("api_key", "default_value")
+-- Write
+my_settings:saveSetting("api_key", "new_value")
+my_settings:flush() -- Flush to disk
+```
+
+### Preventing UI Blocking (Async Operations)
+Because Lua is single-threaded, synchronous network calls or heavy processing will freeze the UI.
+1. **Always repaint before blocking:** If performing a synchronous blocking task, show the `InfoMessage` and force a screen repaint immediately before running the function:
+   ```lua
+   local info = InfoMessage:new{ text = _("Connecting...") }
+   UIManager:show(info)
+   UIManager:forceRePaint() -- Critical: redraws screen before Lua execution blocks!
+   
+   -- Perform synchronous task
+   local result = performBlockingRequest()
+   UIManager:close(info)
+   ```
+2. **Handle network connection safely:** Never assume WiFi is active. Wrap network code in `NetworkMgr:runWhenOnline(callback)`. If WiFi is off, this prompts the user to enable it, establishes a connection, runs your callback, and then you should clean up using `NetworkMgr:afterWifiAction()` to preserve battery:
+   ```lua
+   NetworkMgr:runWhenOnline(function()
+       -- perform requests
+       NetworkMgr:afterWifiAction()
+   end)
+   ```
+3. **Async / Coroutines:** Look at `kosync.koplugin` or `calibre.koplugin` for examples of wrapping processes in Lua coroutines combined with event yielding to build non-blocking multi-step updates.
+
+### Exemplar Plugins to Model
+* **[newsdownloader.koplugin](file:///home/denial/.repos/koreader/plugins/newsdownloader.koplugin/main.lua):** Demonstrates handling HTTPS connections, managing downloaded ePUB packages, storing feed lists, and displaying sequential popup progress alerts.
+* **[wallabag.koplugin](file:///home/denial/.repos/koreader/plugins/wallabag.koplugin/main.lua):** The gold standard for a sync plugin. Shows OAuth2 key exchanges, REST requests, queue handling, and settings integration.
+* **[exporter.koplugin](file:///home/denial/.repos/koreader/plugins/exporter.koplugin/main.lua):** Demonstrates traversing reading highlights and sending them to local files or remote endpoints (Joplin).
+* **[SSH.koplugin](file:///home/denial/.repos/koreader/plugins/SSH.koplugin/main.lua):** Shows system control, spawning processes, and modifying device services.

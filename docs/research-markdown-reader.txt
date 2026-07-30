@@ -1,0 +1,196 @@
+# KOReader Markdown Reader Plugin Design Report
+
+## Introduction & Background
+This report outlines the design and implementation of a KOReader koplugin to render Markdown (`.md`) files as HTML instead of displaying them as plain text. The design leverages KOReader's existing internal frameworks to minimize footprint and maintain portability.
+
+## Citation of KOReader GitHub References
+- **PR #15588**: "TextViewer: view html, markdown" (introduced built-in TextViewer support for HTML/Markdown display).
+- **PR #15599**: "Highlights: note format" (updated highlight/note formatting details).
+- **Issue #12683**: "FR: Markdown Viewer Support" (discussed native vs. converted Markdown viewing).
+- **Core Files**:
+  - `frontend/apps/filemanager/lib/md.lua` (Vendored `luamd` Markdown->HTML parser).
+  - `frontend/apps/filemanager/filemanagerconverter.lua` (`FileConverter` utility).
+  - `frontend/document/documentregistry.lua` (`DocumentRegistry` class).
+  - `frontend/apps/filemanager/filemanager.lua` (`FileManager` event loop and open flow).
+  - `frontend/apps/reader/readerui.lua` (`ReaderUI` loader).
+
+---
+
+## Design Option Comparison
+
+### Option A: Auxiliary Provider Plugin (Recommended)
+- **Mechanism**: Registers an auxiliary provider for `"md"` via `DocumentRegistry:addAuxProvider`. The callback reads the `.md` file, parses it using the internal `md.lua` module, writes a temporary `.html` file with a styled head, and calls `ReaderUI:showReader` on it.
+- **Pros**:
+  - Lightest implementation; requires no modification to core KOReader files.
+  - Reuses the robust, high-performance `crengine` HTML parser/renderer (`credocument.lua`) via the standard ReaderUI path.
+  - Integrates seamlessly with `FileManager:openFile` branching, allowing it to be associated as the default handler.
+- **Cons**:
+  - Creates a temporary file in `/tmp` that requires disk write permissions.
+  - The reader title/history will display the path of the temporary HTML file instead of the original Markdown file.
+
+### Option B: Custom Document Subclass
+- **Mechanism**: Implement a subclass `MarkdownDocument:extend(Document)` that handles Markdown in-memory and feeds the parsed stream directly to crengine.
+- **Pros**:
+  - Clean path tracking (no `/tmp` files, original `.md` path preserved in bookmarks/history).
+- **Cons**:
+  - Heavyweight and extremely complex; requires writing custom stream wrappers and binding directly to C++ crengine logic. High risk of memory leaks or crashes.
+
+### Option C: File Manager Context Menu Action
+- **Mechanism**: Adds a "View Rendered" option to the file manager context menu wrapping `filemanagerconverter.lua`.
+- **Pros**:
+  - Trivial to implement.
+- **Cons**:
+  - Poor UX; does not support default tap-to-open association (files open as plain text by default).
+
+---
+
+## Technical skeleton for Option A
+
+### File: `plugins/markdownreader.koplugin/_meta.lua`
+```lua
+local _ = require("gettext")
+return {
+    name = "markdownreader",
+    fullname = _("Markdown Reader"),
+    description = _("Automatically renders Markdown files to HTML and displays them in the reader."),
+    author = "Antigravity",
+}
+```
+
+### File: `plugins/markdownreader.koplugin/main.lua`
+```lua
+local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local DocumentRegistry = require("document/documentregistry")
+local ReaderUI = require("apps/reader/readerui")
+local _ = require("gettext")
+
+local MarkdownReader = WidgetContainer:extend{
+    name = "markdownreader",
+}
+
+function MarkdownReader:init()
+    -- Register as an auxiliary provider for Markdown files
+    DocumentRegistry:addAuxProvider("md", "text/markdown", {
+        provider = "markdownreader",
+        order = 10,
+        callback = function(file)
+            self:openRenderedMarkdown(file)
+        end
+    })
+
+    -- Auto-register default association in settings
+    if G_reader_settings and G_reader_settings.provider then
+        if not G_reader_settings.provider["md"] then
+            G_reader_settings.provider["md"] = "markdownreader"
+        end
+    end
+end
+
+function MarkdownReader:openRenderedMarkdown(file)
+    local f = io.open(file, "r")
+    if not f then return end
+    local content = f:read("*all")
+    f:close()
+
+    -- Load the vendored luamd parser
+    local md = require("apps/filemanager/lib/md")
+    local html_fragment = md(content)
+
+    -- Stylesheet for clean e-reader layout
+    local stylesheet = [[
+        body {
+            font-family: sans-serif;
+            line-height: 1.5;
+            margin: 5%;
+            padding: 0;
+            color: #000;
+            background-color: #fff;
+        }
+        h1, h2, h3, h4 {
+            margin-top: 1.2em;
+            margin-bottom: 0.4em;
+            font-weight: bold;
+        }
+        h1 { font-size: 1.5em; border-bottom: 1px solid #000; padding-bottom: 0.2em; }
+        h2 { font-size: 1.3em; }
+        h3 { font-size: 1.1em; }
+        p { margin: 0.8em 0; text-align: justify; }
+        a { color: #000; text-decoration: underline; }
+        code {
+            font-family: monospace;
+            background-color: #f0f0f0;
+            padding: 1px 3px;
+        }
+        pre {
+            background-color: #f0f0f0;
+            padding: 8px;
+            overflow-x: auto;
+            border: 1px solid #ccc;
+        }
+        blockquote {
+            border-left: 3px solid #000;
+            margin: 0;
+            padding-left: 8px;
+            color: #333;
+        }
+        ul, ol { padding-left: 1.5em; margin: 0.5em 0; }
+        li { margin: 0.3em 0; }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 1em 0;
+        }
+        th, td {
+            border: 1px solid #000;
+            padding: 6px;
+            text-align: left;
+        }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+    ]]
+
+    -- Wrap the fragment into a full valid HTML document
+    local html_document = string.format([[
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>%s</title>
+    <style>%s</style>
+</head>
+<body>
+    %s
+</body>
+</html>
+    ]], file:match("([^/]+)$") or "Markdown Document", stylesheet, html_fragment)
+
+    -- Write converted content to /tmp/
+    local temp_html_path = "/tmp/" .. (file:match("([^/]+)$") or "temp") .. ".html"
+    local out = io.open(temp_html_path, "w")
+    if out then
+        out:write(html_document)
+        out:close()
+    end
+
+    -- Open via ReaderUI showReader helper
+    ReaderUI:showReader(temp_html_path)
+end
+
+return MarkdownReader
+```
+
+---
+
+## File Association Setup
+
+To associate `.md` files with this custom provider so tapping them immediately renders:
+
+1. **Programmatic Association**:
+   In `main.lua`'s `init()`, the plugin explicitly overrides the file provider association inside `G_reader_settings` settings table if not set:
+   ```lua
+   if G_reader_settings and G_reader_settings.provider then
+       G_reader_settings.provider["md"] = "markdownreader"
+   end
+   ```
+
+2. **Manual Filemanager Association**:
+   Alternatively, the user can long-press a `.md` file in the KOReader File Manager, choose **"Open with..."**, select **"Markdown Reader"**, and check **"Always open files with this provider"**. This triggers `FileManager:setProvider(file, provider, true)` internally, committing the setting to `G_reader_settings`.

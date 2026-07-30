@@ -1,0 +1,121 @@
+# Reading AI-2526 Markdown notes on the Kobo — research report
+
+Date: 2026-07-30  ·  Method: 4 parallel `agy` runners (Gemini) + local inspection of
+the installed KOReader at `/mnt/kobo/.adds/koreader` (build `v2025.10`, git rev present).
+Private repo: `git@github.com:denialbb/AI-2526.git` (branch `master`), local clone
+`~/Work/uni/AI-2526`. Kobo mounted via USB at `/mnt/kobo`.
+
+Raw runner outputs: `/tmp/kobo-research/out-{1,2,3,4}-*.txt`
+
+---
+
+## TL;DR — the realistic path
+
+1. **Get notes onto the device:** pull on the laptop, then **`rsync` the `.md` files
+   to `/mnt/kobo` over USB** (or over Wi-Fi via KOReader's built-in Dropbear SSH on
+   port 2222). Git is **not** on the Kobo and shouldn't be — keep the Kobo passive.
+2. **Read them formatted:** KOReader v2025.10 **cannot render `.md` formatted when
+   opened directly** — it opens as plain text (crengine registers `.md` as
+   `text/plain`; crengine has no markdown parser). Use the built-in **Convert → HTML**
+   action (long-press the file → *Convert*) which runs the bundled pure-Lua
+   `luamd` parser (`frontd/apps/filemanager/lib/md.lua`) **offline on-device**, then
+   open the resulting `.html`. Or pre-convert to EPUB on the laptop with Pandoc for
+   the best reading experience.
+3. **libghostty is a red herring** for this use case (see §4).
+
+---
+
+## 1. Markdown rendering in this installed build (local ground truth)
+
+- Installed build: `v2025.10` (file `git-rev`). PR #15588 "TextViewer: view html,
+  markdown" and PR #15599 (`note_format`) **merged June 2026** → **NOT in this
+  build**. `frontend/ui/widget/textviewer.lua` has zero `markdown`/`note_format`
+  references (confirmed locally). Those PRs only affect the *notes/highlights
+  viewer widget* anyway, not opening `.md` files as books.
+- `frontend/document/credocument.lua` registers `.md` with provider credocument as
+  `text/plain`. `rg -i markdown` across crengine → **no matches**: crengine does
+  not parse markdown. So tapping a `.md` opens it showing literal `#`, `**`, `[]`.
+- **What DOES work today, offline, on-device:** `filemanagerconverter.lua` +
+  `apps/filemanager/lib/md.lua` (a vendored copy of `bakpakin/luamd`, pure Lua).
+  Long-press a `.md` in the file manager → **Convert → HTML** writes `foo.md.html`
+  which opens formatted via crengine's HTML engine. This needs no network.
+- **Best reading quality:** pre-convert to EPUB on the laptop (`pandoc *.md -o
+  out.epub` or per-file) and transfer the EPUBs — paginated, styled, TOC, e-ink
+  optimized. The on-device Convert path is fine for ad-hoc single files.
+
+## 2. Getting the notes from the private repo onto the Kobo
+
+| Method | Verdict | Notes |
+| --- | --- | --- |
+| **Manual USB `rsync` to `/mnt/kobo`** | ✅ Recommended default | Simplest, zero battery cost, no wifi config. |
+| **Wi-Fi `rsync` → KOReader Dropbear SSH (port 2222)** | ✅ Best wireless | Kobo stays passive; laptop pushes. Needs ssh key in `.adds/koreader/settings/SSH/authorized_keys` and SSH server started (Tools menu). |
+| On-device `git pull` via `terminal.koplugin` | ❌ Impractical | No git binary on Kobo OS; cross-compiling git+ssh deps is high effort/fragile. `terminal.koplugin` exists but no git. |
+| Syncthing (kosyncthing_plus.koplugin) | ⚠️ Poor | Heavy continuous hashing/Wi-Fi → drains e-ink battery in hours. |
+| kosync / Syncery / AnnotationSync | ❌ Wrong tool | Sync reading *progress/highlights metadata* only, not arbitrary files. |
+| newsdownloader / wallabag / opds | ❌ Wrong tool | Feed/article/OPDS catalog pullers, not git-repo file sync. |
+| `bjw-s-labs/kobo-ssh` | ❌ Redundant | KOReader already ships a Dropbear (`/mnt/kobo/.adds/koreader/dropbear`, ARM ELF present). |
+
+**Recommended workflow (laptop-push):**
+
+```bash
+# laptop: pull repo, push .md files to Kobo over Wi-Fi (Kobo SSH server running)
+LOCAL=~/Work/uni/AI-2526
+KOBO_IP=<kobo-ip>      # KOReader → Network menu shows it
+KOBO_PORT=2222
+cd "$LOCAL" && git pull origin master
+rsync -avz --delete \
+  -e "ssh -p $KOBO_PORT -o StrictHostKeyChecking=no" \
+  --include='*/' --include='*.md' --exclude='*' \
+  "$LOCAL/" "root@$KOBO_IP:/mnt/onboard/notes/AI-2526/"
+
+# …or over USB (Kobo mounted at /mnt/kobo):
+rsync -av --delete --include='*/' --include='*.md' --exclude='*' \
+  "$LOCAL/" "/mnt/kobo/notes/AI-2526/"
+```
+
+Optional laptop-side pre-conversion for the best reading experience:
+```bash
+for f in **/*.md; do pandoc "$f" -o "${f%.md}.epub"; done
+```
+
+## 3. Plugin survey (none are a good fit for *importing* md notes)
+
+All of `newsdownloader`, `wallabag`, `opds`, `kosync`, `Syncery`,
+`AnnotationSync`, `exporter`, `texteditor`, `bookshortcuts` were surveyed (see
+`out-3-plugins.txt`). **None** ingest arbitrary `.md` files from a git repo.
+- `texteditor.koplugin` (installed) lets you edit raw `.md` text on-device — useful
+  for quick edits, no formatting, no networking.
+- `exporter.koplugin` exports KOReader highlights *to* markdown (one-way out).
+
+## 4. libghostty — verdict: ❌ not useful here
+
+- `libghostty` (Ghostty's embeddable core, by Mitchell Hashimoto) is a **terminal
+  emulator** library in Zig. First component `libghostty-vt` exposes VT-sequence
+  parsing, terminal-cell state, and ANSI style parsing via a zero-dependency C/Zig
+  API. As of 2026 it's **preview/alpha** (API in flux). Source: ghostty-org/ghostty
+  (Ghostling demo); blog "Libghostty Is Coming" (Sept 2025).
+- Terminal emulation ≠ markdown rendering: it maps chars onto a fixed monospace cell
+  grid. Markdown has no VT/ANSI escapes. The only roundabout path is pre-rendering
+  md to ANSI with `glow`/`mdcat` then feeding it to libghostty-vt — loses variable
+  fonts, margins, pagination that make e-ink reading good. **No known e-ink
+  embedding projects.**
+- **Verdict: architectural mismatch. Skip it.** KOReader's crengine/HTML path (or
+  Pandoc→EPUB) is the right tool.
+
+## 5. Concrete next step (recommended)
+
+1. `~/Work/uni/AI-2526`: `git pull origin master`.
+2. `rsync --include='*.md' …` → `/mnt/kobo/notes/AI-2526/` (USB) — or Wi-Fi SSH push.
+3. In KOReader: long-press a note → *Convert → HTML* → open. For bulk/best UX, run
+   `pandoc` on the laptop to produce EPUBs and sync those instead.
+4. (Optional) upgrade KOReader to a build with PR #15588/#15599 if you want
+   formatted markdown *inside* the notes/highlights viewer — but that's a different
+   feature from reading standalone `.md` files.
+
+## Sources
+- KOReader PR #15588, #15599; issue #12683; SSH wiki; docs.
+- mitchellh.com "Libghostty Is Coming"; ghostty.org/docs; github.com/ghostty-org/ghostty.
+- d0nizam/syncery.koplugin, dani84bs/AnnotationSync.koplugin, omer-faruq/assistant.koplugin.
+- Local: `/mnt/kobo/.adds/koreader/{frontend/apps/filemanager/filemanagerconverter.lua,
+  apps/filemanager/lib/md.lua, frontend/document/credocument.lua,
+  frontend/ui/widget/textviewer.lua, plugins/SSH.koplugin/main.lua, dropbear}`.
