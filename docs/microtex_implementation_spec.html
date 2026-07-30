@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MicroTeX Integration Specification</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --text-color: #e2e8f0;
+            --accent-color: #38bdf8;
+            --card-bg: #1e293b;
+            --border-color: #334155;
+            --code-bg: #0b1120;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+        }
+
+        header {
+            background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);
+            padding: 4rem 2rem;
+            text-align: center;
+            border-bottom: 4px solid var(--accent-color);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 3rem;
+            color: #ffffff;
+            letter-spacing: -1px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        header p {
+            font-size: 1.25rem;
+            color: #e0f2fe;
+            margin-top: 1rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        main {
+            max-width: 1000px;
+            margin: 3rem auto;
+            padding: 0 2rem;
+        }
+
+        section {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2.5rem;
+            margin-bottom: 2.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        section:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+
+        h2 {
+            color: var(--accent-color);
+            font-size: 2rem;
+            margin-top: 0;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 0.5rem;
+        }
+
+        h3 {
+            font-size: 1.5rem;
+            color: #94a3b8;
+            margin-top: 2rem;
+        }
+
+        p {
+            font-size: 1.1rem;
+            color: #cbd5e1;
+        }
+
+        ul, ol {
+            font-size: 1.1rem;
+            color: #cbd5e1;
+            padding-left: 1.5rem;
+        }
+
+        li {
+            margin-bottom: 0.75rem;
+        }
+
+        code {
+            font-family: 'Fira Code', 'JetBrains Mono', monospace;
+            background-color: var(--code-bg);
+            color: #7dd3fc;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.95em;
+        }
+
+        pre {
+            background-color: var(--code-bg);
+            padding: 1.5rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+        }
+
+        pre code {
+            background-color: transparent;
+            padding: 0;
+            color: #a5b4fc;
+        }
+
+        .highlight-box {
+            background: rgba(56, 189, 248, 0.1);
+            border-left: 4px solid var(--accent-color);
+            padding: 1rem 1.5rem;
+            border-radius: 0 8px 8px 0;
+            margin: 2rem 0;
+        }
+
+        .step-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            background-color: var(--accent-color);
+            color: #000;
+            border-radius: 50%;
+            font-weight: bold;
+            margin-right: 1rem;
+        }
+
+        .api-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1.5rem;
+        }
+
+        .api-table th, .api-table td {
+            text-align: left;
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .api-table th {
+            background-color: rgba(255,255,255,0.05);
+            color: var(--accent-color);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>MicroTeX Integration</h1>
+        <p>Complete Implementation Specification & Architecture Design for KOReader Markdown Plugin</p>
+    </header>
+
+    <main>
+        <section>
+            <h2>1. Architecture Overview</h2>
+            <p>The implementation will replace the current C-mock with a robust C++ wrapper that statically links against the real MicroTeX library. The pipeline ensures smooth rendering of LaTeX strings into SVG files suitable for e-ink displays.</p>
+            <div class="highlight-box">
+                <strong>Data Flow:</strong><br>
+                <code>KOReader (Lua)</code> &rarr; <code>FFI (math_renderer.lua)</code> &rarr; <code>C Wrapper (microtex_wrapper.cpp)</code> &rarr; <code>MicroTeX Engine (C++)</code> &rarr; <code>SVG File</code>
+            </div>
+        </section>
+
+        <section>
+            <h2>2. Implementation Plan</h2>
+            
+            <h3><span class="step-number">1</span> Submodule Integration</h3>
+            <p>We will add the official MicroTeX repository as a Git submodule to ensure we track upstream changes while keeping the code self-contained.</p>
+            <pre><code>git submodule add https://github.com/X-Wei/microtex.git plugins/markdownreader.koplugin/microtex</code></pre>
+            
+            <h3><span class="step-number">2</span> Font Asset Management</h3>
+            <p>MicroTeX requires pre-processed font data (<code>.clm</code> files) to compute glyph metrics. We will include a default math font (e.g., <code>lm-math.clm</code>) inside the plugin's resource directory. The <code>math_renderer.lua</code> will pass the absolute path of this font to the initialization function.</p>
+
+            <h3><span class="step-number">3</span> The C++ Wrapper (<code>microtex_wrapper.cpp</code>)</h3>
+            <p>We will implement a clean C-ABI wrapper around the MicroTeX C++ API. This ensures LuaJIT's FFI can seamlessly invoke the engine.</p>
+            <table class="api-table">
+                <tr>
+                    <th>Function Signature</th>
+                    <th>Responsibility</th>
+                </tr>
+                <tr>
+                    <td><code>void microtex_init(const char* clm_font_path)</code></td>
+                    <td>Initializes the <code>microtex::MicroTeX</code> engine and registers the base font.</td>
+                </tr>
+                <tr>
+                    <td><code>int microtex_render_to_svg(const char* latex, const char* out, float size, float pad)</code></td>
+                    <td>Parses the LaTeX string, executes the SVG graphics 2D context, and writes the output. Returns 0 on success.</td>
+                </tr>
+                <tr>
+                    <td><code>void microtex_release()</code></td>
+                    <td>Releases memory allocated by the MicroTeX engine to prevent memory leaks on plugin exit.</td>
+                </tr>
+            </table>
+
+            <h3><span class="step-number">4</span> Build System Modernization</h3>
+            <p>The current <code>Makefile</code> will be updated to handle a two-stage build process for cross-compiling to the Kobo (ARMhf):</p>
+            <ol>
+                <li><strong>MicroTeX Static Library:</strong> Use CMake to compile MicroTeX into <code>libmicrotex.a</code>, disabling unused features (e.g., GTK/Qt rendering backends) to keep the binary small.</li>
+                <li><strong>Shared Object:</strong> Compile <code>microtex_wrapper.cpp</code> and statically link it with <code>libmicrotex.a</code> to produce the final <code>libmicrotex.so</code>.</li>
+            </ol>
+            <pre><code># Example CMake configuration for cross-compiling MicroTeX
+cmake -DCMAKE_TOOLCHAIN_FILE=../kobo-toolchain.cmake \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DUSE_SVG=ON \
+      ../microtex</code></pre>
+        </section>
+
+        <section>
+            <h2>3. Error Handling & Edge Cases</h2>
+            <ul>
+                <li><strong>Parse Failures:</strong> If MicroTeX throws a parsing exception (e.g., invalid LaTeX syntax), the wrapper will catch the C++ exception, log the error to stderr, and return a non-zero exit code. The Lua layer will gracefully fallback to displaying the raw string.</li>
+                <li><strong>Font Missing:</strong> If the <code>.clm</code> font path is invalid, initialization will fail early. The Lua module will verify file existence before calling <code>microtex_init</code>.</li>
+                <li><strong>Memory Constraints:</strong> The <code>microtex_release()</code> function will be bound to KOReader's plugin lifecycle hooks (e.g., <code>onCloseWidget</code> or plugin teardown) to ensure heap memory is freed when the reader is closed.</li>
+            </ul>
+        </section>
+    </main>
+</body>
+</html>

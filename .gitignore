@@ -12,3 +12,6 @@ Thumbs.db
 
 # PAT file (GitHub token copied to Kobo)
 secrets/
+
+# Toolchains
+arm-gnu-toolchain-*
