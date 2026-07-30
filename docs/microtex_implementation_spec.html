@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MicroTeX Integration Specification</title>
+    <title>Math Rendering Implementation Specification</title>
     <style>
         :root {
             --bg-color: #0f172a;
@@ -162,71 +162,262 @@
 </head>
 <body>
     <header>
-        <h1>MicroTeX Integration</h1>
-        <p>Complete Implementation Specification & Architecture Design for KOReader Markdown Plugin</p>
+        <h1>Math Rendering</h1>
+        <p>Design specification for LaTeX math in the KOReader Markdown Reader plugin &mdash; pure Lua now, native MicroTeX deferred</p>
     </header>
 
     <main>
         <section>
-            <h2>1. Architecture Overview</h2>
-            <p>The implementation will replace the current C-mock with a robust C++ wrapper that statically links against the real MicroTeX library. The pipeline ensures smooth rendering of LaTeX strings into SVG files suitable for e-ink displays.</p>
-            <div class="highlight-box">
-                <strong>Data Flow:</strong><br>
-                <code>KOReader (Lua)</code> &rarr; <code>FFI (math_renderer.lua)</code> &rarr; <code>C Wrapper (microtex_wrapper.cpp)</code> &rarr; <code>MicroTeX Engine (C++)</code> &rarr; <code>SVG File</code>
-            </div>
+            <h2>0. Status &amp; history</h2>
+            <p>An earlier revision of this document specified a native C++ MicroTeX integration
+            (FFI wrapper, cross-compiled <code>libmicrotex.so</code>, SVG output). <strong>That
+            integration was never implemented</strong> &mdash; no Makefile, no C/C++ source and no
+            shared object ever existed in this repository or its history. Several of its
+            technical claims were also wrong; they are corrected in
+            <a href="#deferred">&sect;5</a> so the decision is not re-litigated later.</p>
+            <p>The decision now in force: <strong>implement math rendering in pure Lua, behind a
+            swappable backend seam.</strong> This keeps DESIGN_final.md objective&nbsp;3 intact
+            &mdash; &ldquo;achieve (1) and (2) <em>without cross-compiling anything</em>&rdquo;.
+            A native backend remains possible later, but is explicitly deferred.</p>
         </section>
 
         <section>
-            <h2>2. Implementation Plan</h2>
-            
-            <h3><span class="step-number">1</span> Submodule Integration</h3>
-            <p>We will add the official MicroTeX repository as a Git submodule to ensure we track upstream changes while keeping the code self-contained.</p>
-            <pre><code>git submodule add https://github.com/X-Wei/microtex.git plugins/markdownreader.koplugin/microtex</code></pre>
-            
-            <h3><span class="step-number">2</span> Font Asset Management</h3>
-            <p>MicroTeX requires pre-processed font data (<code>.clm</code> files) to compute glyph metrics. We will include a default math font (e.g., <code>lm-math.clm</code>) inside the plugin's resource directory. The <code>math_renderer.lua</code> will pass the absolute path of this font to the initialization function.</p>
+            <h2>1. Pipeline</h2>
+            <p>Math is handled by bracketing the existing Markdown&rarr;HTML conversion described in
+            DESIGN_final.md &sect;5.4 / &sect;6.3, not by replacing it.</p>
+            <div class="highlight-box">
+                <strong>Data flow:</strong><br>
+                <code>.md source</code> &rarr;
+                <code>interceptor: extract math &rarr; placeholder tokens</code> &rarr;
+                <code>FileConverter:mdToHtml</code> (vendored luamd) &rarr;
+                <code>substitute tokens &rarr; rendered HTML/image</code> &rarr;
+                <code>write cache/md/&lt;name&gt;.html</code> &rarr;
+                <code>ReaderUI:showReader</code> &rarr; <code>crengine</code>
+            </div>
 
-            <h3><span class="step-number">3</span> The C++ Wrapper (<code>microtex_wrapper.cpp</code>)</h3>
-            <p>We will implement a clean C-ABI wrapper around the MicroTeX C++ API. This ensures LuaJIT's FFI can seamlessly invoke the engine.</p>
+            <h3><span class="step-number">1</span> Extract <em>before</em> markdown conversion</h3>
+            <p>Formula bodies are removed from the source and replaced with inert placeholder
+            tokens before luamd ever sees the text. This is not an optimisation &mdash; it is
+            required for correctness. LaTeX is dense in characters that Markdown treats as
+            markup:</p>
+            <ul>
+                <li><code>_</code> &mdash; subscripts (<code>x_i</code>) collide with Markdown emphasis, so
+                    a formula containing two subscripts silently becomes italic text with the
+                    underscores eaten.</li>
+                <li><code>*</code> &mdash; collides with emphasis/strong the same way.</li>
+                <li><code>\</code> &mdash; every LaTeX command starts with a backslash, and Markdown
+                    treats backslash as an escape character, so <code>\alpha</code> can lose its
+                    backslash entirely.</li>
+                <li>Bracket and brace runs can be mistaken for link or reference syntax.</li>
+            </ul>
+            <p>By the time luamd runs, the formula is gone and only an opaque token remains. The
+            token must be chosen so that luamd passes it through unchanged and so that it cannot
+            occur in real note text (a fixed prefix plus a counter and a nonce, containing no
+            Markdown-significant characters).</p>
+
+            <h3><span class="step-number">2</span> Substitute <em>after</em> markdown conversion</h3>
+            <p>Substitution happens on the generated HTML string, not on the Markdown. That
+            ordering is what makes the backend seam possible: because the replacement is spliced
+            into finished HTML, a backend is free to return <em>either</em> an
+            <code>&lt;img&gt;</code> element pointing at a cached image file <em>or</em> a block of
+            inline HTML (spans, tables, entities) that crengine lays out directly. Neither form
+            would survive being fed back through the Markdown parser. It also means adding a new
+            backend never requires touching the interception or conversion code.</p>
+            <p>Display math (<code>$$&hellip;$$</code>) substitutes into a block-level container;
+            inline math (<code>$&hellip;$</code>) into an inline one. Whatever a backend returns is
+            treated as HTML and therefore must be produced already escaped &mdash; escaping is the
+            backend's responsibility, since only it knows whether its output is markup or text.</p>
+        </section>
+
+        <section>
+            <h2>2. The backend seam</h2>
+            <p>Three Lua modules, with the dependency arrow pointing one way only: the plugin
+            depends on the facade, the facade depends on backends, backends depend on nothing in
+            the plugin.</p>
             <table class="api-table">
                 <tr>
-                    <th>Function Signature</th>
-                    <th>Responsibility</th>
+                    <th>Module</th>
+                    <th>Role</th>
                 </tr>
                 <tr>
-                    <td><code>void microtex_init(const char* clm_font_path)</code></td>
-                    <td>Initializes the <code>microtex::MicroTeX</code> engine and registers the base font.</td>
+                    <td><code>math_renderer.lua</code></td>
+                    <td><strong>Facade.</strong> The only module the rest of the plugin talks to.
+                    Selects a backend, owns the cache, owns the fallback policy. Its contract is
+                    &ldquo;given LaTeX and a display/inline flag, return an HTML fragment&rdquo; &mdash;
+                    it never returns an error to the caller, only a fragment (see &sect;4).</td>
                 </tr>
                 <tr>
-                    <td><code>int microtex_render_to_svg(const char* latex, const char* out, float size, float pad)</code></td>
-                    <td>Parses the LaTeX string, executes the SVG graphics 2D context, and writes the output. Returns 0 on success.</td>
+                    <td><code>math_backend_lua.lua</code></td>
+                    <td><strong>Pure-Lua backend &mdash; ships now.</strong> No FFI, no native code,
+                    no build step. Handles the subset of LaTeX that actually appears in the notes;
+                    reports honest failure for anything outside that subset rather than emitting
+                    something wrong.</td>
                 </tr>
                 <tr>
-                    <td><code>void microtex_release()</code></td>
-                    <td>Releases memory allocated by the MicroTeX engine to prevent memory leaks on plugin exit.</td>
+                    <td><em>native backend</em></td>
+                    <td><strong>Future, optional, deferred.</strong> Would implement the same
+                    backend contract over a native engine. Not present; see &sect;5 for why.</td>
                 </tr>
             </table>
-
-            <h3><span class="step-number">4</span> Build System Modernization</h3>
-            <p>The current <code>Makefile</code> will be updated to handle a two-stage build process for cross-compiling to the Kobo (ARMhf):</p>
-            <ol>
-                <li><strong>MicroTeX Static Library:</strong> Use CMake to compile MicroTeX into <code>libmicrotex.a</code>, disabling unused features (e.g., GTK/Qt rendering backends) to keep the binary small.</li>
-                <li><strong>Shared Object:</strong> Compile <code>microtex_wrapper.cpp</code> and statically link it with <code>libmicrotex.a</code> to produce the final <code>libmicrotex.so</code>.</li>
-            </ol>
-            <pre><code># Example CMake configuration for cross-compiling MicroTeX
-cmake -DCMAKE_TOOLCHAIN_FILE=../kobo-toolchain.cmake \
-      -DBUILD_SHARED_LIBS=OFF \
-      -DUSE_SVG=ON \
-      ../microtex</code></pre>
+            <p>A backend exposes exactly two things: a name, and a render function taking
+            <code>(latex, is_display)</code> and returning either an HTML fragment or
+            <code>nil, err</code>. Backend selection is a setting with a safe default; an
+            unavailable or failing backend must degrade to the pure-Lua one, and a failing
+            pure-Lua one degrades to source display. There is deliberately no backend
+            <em>init</em> step in the contract that the caller must remember to run &mdash; a backend
+            that needs setup does it lazily and reports unavailability through the same
+            <code>nil, err</code> channel.</p>
         </section>
 
         <section>
-            <h2>3. Error Handling & Edge Cases</h2>
+            <h2>3. Caching</h2>
             <ul>
-                <li><strong>Parse Failures:</strong> If MicroTeX throws a parsing exception (e.g., invalid LaTeX syntax), the wrapper will catch the C++ exception, log the error to stderr, and return a non-zero exit code. The Lua layer will gracefully fallback to displaying the raw string.</li>
-                <li><strong>Font Missing:</strong> If the <code>.clm</code> font path is invalid, initialization will fail early. The Lua module will verify file existence before calling <code>microtex_init</code>.</li>
-                <li><strong>Memory Constraints:</strong> The <code>microtex_release()</code> function will be bound to KOReader's plugin lifecycle hooks (e.g., <code>onCloseWidget</code> or plugin teardown) to ensure heap memory is freed when the reader is closed.</li>
+                <li><strong>Content-addressed.</strong> The cache key is derived from the LaTeX
+                content itself (plus the display/inline flag, the backend name, and a render
+                version), <em>not</em> from the containing file, its path, or the formula's position.
+                Identical formulas across different notes therefore share one cache entry, and
+                editing a note only invalidates the formulas that actually changed.</li>
+                <li><strong>Stored under KOReader's cache directory</strong> &mdash; alongside the
+                generated HTML under <code>cache/md/</code> in the KOReader data dir, reached via
+                <code>DataStorage</code>. <strong>Not <code>/tmp</code>.</strong> On the Kobo,
+                <code>/tmp</code> is volatile and cleared on reboot, which would force a full
+                re-render of every formula after every power cycle; onboard storage persists. (An
+                older revision used <code>/tmp/microtex-cache/</code>; <code>deploy.sh</code> still
+                mops that up over SSH if configured, purely as legacy cleanup.)</li>
+                <li>The cache holds whatever the backend produced. A backend returning inline HTML
+                may need no image files at all &mdash; the cache must not assume image output
+                exists.</li>
+                <li>Because keys are content hashes, entries are never mutated, only added; a
+                stale entry is impossible and eviction can be as crude as deleting the directory.
+                <code>deploy.sh</code> clears it on every deploy so render tests start fresh.</li>
             </ul>
+        </section>
+
+        <section>
+            <h2>4. Graceful degradation (a first-class rule)</h2>
+            <div class="highlight-box">
+                <strong>Rule:</strong> a document must always open. Math rendering is an
+                enhancement; a math failure of any kind &mdash; unsupported construct, malformed
+                LaTeX, missing backend, cache write failure, unexpected Lua error &mdash; must
+                degrade to showing the LaTeX <em>source</em> for that one formula and must never
+                abort the conversion or prevent the note from opening.
+            </div>
+            <ul>
+                <li>Every backend call is wrapped so that an unexpected error is caught and turned
+                into the same outcome as a clean failure.</li>
+                <li>The fallback is the original LaTeX source, escaped and marked up so it is
+                visibly a formula the reader can still read and interpret manually. Silent
+                deletion of the formula is the one unacceptable outcome.</li>
+                <li>Failures are logged for diagnosis but never surfaced as blocking dialogs while
+                opening a document.</li>
+                <li>Degradation is per-formula. One unsupported formula must not disable math for
+                the rest of the note.</li>
+                <li>This rule is what makes shipping a deliberately incomplete pure-Lua backend
+                safe: partial LaTeX coverage produces readable source text, not breakage.</li>
+            </ul>
+        </section>
+
+        <section id="deferred">
+            <h2>5. Deferred: native MicroTeX backend</h2>
+            <p>Recorded here so the trade-off is not rediscovered from scratch. These are the real
+            risks that led to deferral. <strong>Items marked UNVERIFIED were not empirically
+            tested</strong> &mdash; they are read from documentation and source knowledge, and must be
+            proven before any native work starts.</p>
+
+            <h3>5.1 The upstream URL in the old spec was wrong</h3>
+            <p>The old spec instructed adding
+            <code>https://github.com/X-Wei/microtex.git</code> as a submodule. That is not the
+            project. The maintained upstream is <strong><code>NanoMichael/MicroTeX</code></strong>.
+            Any future work must start from the correct repository.</p>
+
+            <h3>5.2 <code>-DUSE_SVG=ON</code> is not a real option</h3>
+            <p>The old spec's CMake invocation passed <code>-DUSE_SVG=ON</code>. <strong>No such
+            MicroTeX CMake option exists.</strong> CMake silently accepts unknown
+            <code>-D</code> definitions, so this would have appeared to work and produced a build
+            with no SVG support whatsoever. MicroTeX renders through an abstract
+            <code>Graphics2D</code> interface; SVG output is not a build flag but a feature you
+            implement, by writing a custom <code>Graphics2D</code> subclass that serialises draw
+            calls to SVG. That is real work, not configuration. <em>No build flags are asserted in
+            this document; the correct ones must be read off the upstream
+            <code>CMakeLists.txt</code> at the time the work is attempted.</em></p>
+
+            <h3>5.3 SVG text rendering &mdash; RETRACTED, was overstated</h3>
+            <div class="highlight-box">
+                <strong>An earlier revision of this document claimed crengine rasterises SVG via
+                <em>nanosvg</em>, which renders paths only, and called this the single
+                highest-risk item &mdash; formulas silently rasterising to blank boxes.
+                That claim is wrong for the deployed device and is retracted.</strong>
+            </div>
+            <p>Inspected directly on the mounted Kobo running <strong>KOReader v2026.07</strong>
+            (<code>libs/libcrengine.so</code>). There are <em>no</em> nanosvg symbols. The
+            rasteriser is <strong>lunasvg</strong>:</p>
+            <pre><code>_ZN7lunasvg8Document12loadFromDataEPKcjPNS_18external_context_tE
+_ZNK7lunasvg8Document14renderToBitmapEjjj
+_ZN22LunaSVGGlyphsCollector8addGlyphEv</code></pre>
+            <p>lunasvg supports <code>&lt;text&gt;</code>, and the presence of
+            <code>LunaSVGGlyphsCollector::addGlyph</code> together with the
+            <code>external_context_t</code> parameter on <code>loadFromData</code> indicates
+            crengine supplies its own font context to lunasvg for glyph rasterisation. A
+            <code>&lt;text&gt;</code>-based SVG is therefore <strong>likely to render</strong>,
+            and the glyph-outline-to-path work described below is probably <em>not</em>
+            mandatory.</p>
+            <p><strong>Still unverified:</strong> symbol inspection is not a render test. Which
+            fonts resolve inside the SVG context, and whether MicroTeX's specific
+            <code>&lt;text&gt;</code> output (with its font-family names and precise glyph
+            positioning) survives, remain untested. The cheap experiment is unchanged and still
+            worth doing first &mdash; render a hand-written SVG containing a
+            <code>&lt;text&gt;</code> element inside a KOReader HTML document on device &mdash;
+            but it is now a confirmation step, not a go/no-go gate. Note also that this finding is
+            specific to v2026.07; older KOReader builds may differ.</p>
+
+            <h3>5.4 It contradicts a project objective</h3>
+            <p>A native backend requires an <strong>ARMhf cross-toolchain</strong> and a
+            cross-compiled shared object, plus <strong>bundling <code>.clm</code> font data</strong>
+            (MicroTeX's pre-processed glyph-metric format) inside the plugin directory. Both
+            directly contradict DESIGN_final.md objective&nbsp;3, &ldquo;without cross-compiling
+            anything &mdash; pure-Lua koplugins dropped into <code>plugins/</code>&rdquo;, and both add
+            per-device binary-compatibility risk that pure Lua does not have. The
+            <code>.clm</code> files also add non-trivial size to a plugin that currently ships as a
+            handful of text files.</p>
+
+            <h3>5.5 Correction to the old API table</h3>
+            <p>The old spec declared the initialiser as:</p>
+            <pre><code>void microtex_init(const char* clm_font_path)</code></pre>
+            <p>Returning <code>void</code> gives the Lua side <strong>no way to detect
+            initialisation failure</strong> &mdash; no status code, no out-parameter, no error
+            channel. Yet the same document's error-handling section claimed that a missing or
+            invalid <code>.clm</code> font path &ldquo;will fail early&rdquo; and be handled. Those two
+            statements are contradictory: with a <code>void</code> return, a failed init is
+            indistinguishable from a successful one, and the first symptom would be a crash or
+            silent blank output at render time. Its proposed mitigation &mdash; checking that the
+            font file exists from Lua first &mdash; only catches a missing file, not a corrupt one,
+            an unparseable one, or an engine that failed to initialise for any other reason.</p>
+            <p>Any future C-ABI wrapper <strong>must</strong> return a status the caller can test
+            (and must catch C++ exceptions at the boundary, since letting them cross into LuaJIT is
+            undefined behaviour). The signatures in the old table are not a specification and
+            should not be treated as one; nothing in this document asserts a verified native API.</p>
+
+            <h3>5.6 Deploy-time consequence</h3>
+            <p>Because no native build exists, <code>deploy.sh</code> treats the native build as
+            <strong>conditional</strong>: it builds only when a <code>Makefile</code> is present in
+            the plugin directory, and otherwise prints a notice and continues. Previously it ran
+            <code>make clean</code> unconditionally under <code>set -eu</code>, which failed
+            immediately and aborted the entire deploy before the device was ever mounted.</p>
+        </section>
+
+        <section>
+            <h2>6. What would reopen this decision</h2>
+            <ol>
+                <li>The pure-Lua backend proving inadequate for formulas that actually occur in the
+                notes &mdash; measured against real files, not hypotheticals.</li>
+                <li>&sect;5.3 being tested and resolved: proof that crengine renders glyphs from a
+                given SVG form on the real device.</li>
+                <li>An accepted answer to the cross-compilation objective in &sect;5.4 &mdash; either the
+                objective changes, or the artefact ships prebuilt and the toolchain stays out of the
+                normal workflow.</li>
+            </ol>
+            <p>Until all three hold, the pure-Lua backend is the implementation, and the seam in
+            &sect;2 is the only thing that needs to keep the option open.</p>
         </section>
     </main>
 </body>
