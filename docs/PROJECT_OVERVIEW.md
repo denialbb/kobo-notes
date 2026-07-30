@@ -1,3 +1,27 @@
+> # ⚠️ SUPERSEDED — HISTORICAL DRAFT, DO NOT USE AS REFERENCE ⚠️
+>
+> **This document is an early draft (v0.1) and is no longer authoritative.**
+> It has been superseded by **[`docs/DESIGN_final.md`](DESIGN_final.md)**, which is
+> the authoritative design document. Read that instead. The body below is kept
+> only as a record of the initial research phase.
+>
+> **Superseded as of:** 2026-07-30
+>
+> **Known-wrong claims in the text below:**
+>
+> - **KOReader version.** The body says the device runs **v2025.10**. The device
+>   actually runs **v2026.07** (`cat /mnt/kobo/.adds/koreader/git-rev`).
+> - **Sync plugin name.** The body calls the sync plugin
+>   `aiactions_sync.koplugin`. Its real, shipped name is **`syncnotes.koplugin`**.
+> - **Reference source clone.** The body references a KOReader source clone at
+>   `~/.repos/koreader`. **That path does not exist**; any claim sourced from it
+>   is unverified.
+>
+> Anything else in this draft may also be stale. Verify against
+> `docs/DESIGN_final.md` and the code under `plugins/` before relying on it.
+
+---
+
 # Project Overview: AI-2526 Notes on Kobo
 
 **Status:** Draft v0.1 (awaiting review)  ·  **Date:** 2026-07-30
