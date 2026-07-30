@@ -1,5 +1,12 @@
 # Slice 2: markdownreader — aux provider registration
 
+> **Status: IMPLEMENTED — historical record (verified 2026-07-30).**
+> Shipped in `plugins/markdownreader.koplugin/main.lua`.
+> This is a record of how the work was sliced, not pending work.
+> Divergence: matches the shipped code, except the aux-provider `callback`
+> returns `self:openMarkdown(file)` and the `openMarkdown` stub below was
+> replaced by the real implementation in Slice 3.
+
 Depends on: Slice 1 (files exist at `plugins/markdownreader.koplugin/`)
 
 ## Goal
