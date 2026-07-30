@@ -1,5 +1,13 @@
 # Slice 5: syncnotes — PAT management + repo configuration dialogs
 
+> **Status: IMPLEMENTED — historical record (verified 2026-07-30).**
+> Shipped in `plugins/syncnotes.koplugin/main.lua`.
+> This is a record of how the work was sliced, not pending work.
+> Divergences: saving a token starts a sync immediately instead of showing a
+> "Token saved." message; `repo` is declared `local` in the repo parser (the
+> code below leaks it as a global); and a "Set Download Path" dialog was added
+> alongside these two.
+
 Depends on: Slice 4 (menu stubs exist)
 
 ## Goal
