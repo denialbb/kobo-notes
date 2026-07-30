@@ -1,18 +1,14 @@
 #!/bin/sh
 # Deploy plugins + secrets to Kobo (USB-mounted).
-# Builds the C-wrapper before deployment.
-# Mounts/unmounts automatically. Prompts for sudo if needed.
-# Clears generated HTML + SVG caches so render tests start fresh.
+# Builds the optional native math backend first, if a Makefile is present.
+# Finds the Kobo by filesystem label, mounts/unmounts it automatically, and
+# leaves it mounted if it already was. Prompts for sudo if needed.
+# Clears generated HTML + math-image caches so render tests start fresh.
 set -eu
 
-# --- Configuration Variables ---
-KOBO_MOUNT="/mnt/kobo"
-KOBO_ROOT="$KOBO_MOUNT/.adds/koreader"
-KOBO_PLUGINS="$KOBO_ROOT/plugins"
-KOBO_CACHE="$KOBO_ROOT/cache"
-KOBO_HTML_CACHE="$KOBO_CACHE/md"
-KOBO_SECRETS="$KOBO_ROOT/secrets"
-KOBO_DEV="/dev/sdb"
+# Device detection, mounting and the derived KOBO_* paths live in kobo-lib.sh,
+# shared with collect-diagnostics.sh.
+. "$(dirname "$0")/kobo-lib.sh"
 
 # Remote cleanup (SSH to Kobo, optional — set KOBO_SSH to a host string)
 # Typical: KOBO_SSH="root@192.168.2.2"  port 2222
@@ -23,35 +19,26 @@ KOBO_SSH_PORT="2222"
 PLUGIN_MARKDOWN="plugins/markdownreader.koplugin"
 PLUGIN_SYNCNOTES="plugins/syncnotes.koplugin"
 
-# --- Helper Functions ---
-maybe_sudo() {
-	if [ "$(id -u)" -eq 0 ]; then
-		"$@"
-	elif [ -x /usr/bin/sudo ]; then
-		sudo "$@"
-	else
-		"$@"
-	fi
-}
-
-# --- Step 1: Build C-Wrapper ---
-echo "Building C-Wrapper for Kobo (ARMhf)..."
-cd "$PLUGIN_MARKDOWN"
-make clean
-make kobo
-mv kobo-libmicrotex.so libmicrotex.so
-cd - >/dev/null
-echo "Build successful."
+# --- Step 1: Build native math backend (optional) ---
+# The math renderer is pure Lua by default and needs no build step.
+# A native (MicroTeX) backend is a deferred, optional future addition; if someone
+# adds a Makefile to the plugin directory, build it here. Otherwise skip cleanly.
+if [ -f "$PLUGIN_MARKDOWN/Makefile" ]; then
+	echo "Makefile found — building native math backend for Kobo (ARMhf)..."
+	cd "$PLUGIN_MARKDOWN"
+	make clean
+	make kobo
+	mv kobo-libmicrotex.so libmicrotex.so
+	cd - >/dev/null
+	echo "Build successful."
+else
+	echo "No Makefile in $PLUGIN_MARKDOWN — skipping native build."
+	echo "  (Math rendering is pure Lua; no native library is required.)"
+fi
 echo ""
 
-# --- Step 2: Mount Kobo ---
-if mount | grep -q "$KOBO_MOUNT"; then
-	ALREADY_MOUNTED=1
-else
-	ALREADY_MOUNTED=0
-	echo "Mounting Kobo..."
-	maybe_sudo mount "$KOBO_DEV" "$KOBO_MOUNT"
-fi
+# --- Step 2: Locate and mount the Kobo ---
+kobo_mount
 
 # --- Step 3: Clean caches (before copy, so fresh start) ---
 echo "Clearing HTML cache at $KOBO_HTML_CACHE ..."
@@ -68,32 +55,43 @@ else
 	echo "  No HTML cache directory found (created on first use)."
 fi
 
-# Clear SVG cache from onboard storage (SVGs are now stored alongside the HTML)
-echo "Clearing onboard SVG cache at $KOBO_CACHE/md/svg ..."
+# Clear the math-image cache from onboard storage, if any backend produced one.
+# The pure-Lua backend may emit no images at all; this is best-effort cleanup.
+echo "Clearing onboard math-image cache at $KOBO_CACHE/md/svg ..."
 if [ -d "$KOBO_CACHE/md/svg" ]; then
 	maybe_sudo rm -rf "$KOBO_CACHE/md/svg"/*.svg 2>/dev/null || true
-	echo "  Onboard SVG cache cleared."
+	echo "  Onboard math-image cache cleared."
 else
-	echo "  No SVG cache directory found on onboard storage."
+	echo "  No math-image cache directory found on onboard storage."
 fi
 
-# Remote SVG cache cleanup (optional, requires network on Kobo)
-# Default SVG cache is now on onboard storage (cleared above), but if the
-# plugin used /tmp/microtex-cache/ on a previous run, clean that too.
+# Remote cleanup of the legacy /tmp math cache (optional, requires network on Kobo).
+# Current design caches under KOReader's cache dir on onboard storage (cleared
+# above); this only mops up leftovers from older /tmp-based runs.
 if [ -n "$KOBO_SSH" ]; then
-	echo "Clearing remote SVG cache at ${KOBO_SSH}:/tmp/microtex-cache/ ..."
-	ssh -p "$KOBO_SSH_PORT" "$KOBO_SSH" "rm -rf /tmp/microtex-cache && mkdir -p /tmp/microtex-cache" 2>/dev/null &&
-		echo "  Remote SVG cache cleared." ||
+	echo "Clearing legacy remote cache at ${KOBO_SSH}:/tmp/microtex-cache/ ..."
+	ssh -p "$KOBO_SSH_PORT" "$KOBO_SSH" "rm -rf /tmp/microtex-cache" 2>/dev/null &&
+		echo "  Legacy remote cache cleared." ||
 		echo "  SSH cleanup failed (Kobo not reachable? skipping)."
 else
-	echo "SVG cache note: SVGs are now stored on onboard storage ($KOBO_CACHE/md/svg/)"
-	echo "  and cleared above. Reboot also clears /tmp/microtex-cache/."
+	echo "Math cache note: rendered math is cached on onboard storage"
+	echo "  ($KOBO_CACHE/md/) and cleared above. Any legacy /tmp cache clears on reboot."
 fi
 
 # --- Step 4: Deploy Files ---
 echo "Deploying plugins..."
-maybe_sudo cp -rv "$PLUGIN_MARKDOWN" "$KOBO_PLUGINS/"
-maybe_sudo cp -rv "$PLUGIN_SYNCNOTES" "$KOBO_PLUGINS/"
+# Copy only plugin sources. The plugins are git submodules, so a plain `cp -r`
+# drags a `.git` file onto the device; the Kobo has no git and it just confuses
+# later inspection. Copy the directory, then drop VCS metadata.
+deploy_plugin() {
+	_src="$1"
+	_name="$(basename "$_src")"
+	maybe_sudo cp -rv "$_src" "$KOBO_PLUGINS/"
+	maybe_sudo rm -rf "$KOBO_PLUGINS/$_name/.git" "$KOBO_PLUGINS/$_name/.gitignore"
+}
+
+deploy_plugin "$PLUGIN_MARKDOWN"
+deploy_plugin "$PLUGIN_SYNCNOTES"
 
 echo "Deploying secrets..."
 if [ -d secrets ]; then
@@ -109,10 +107,4 @@ echo ""
 
 # --- Step 5: Cleanup ---
 # Unmount unless it was already mounted
-if [ "$ALREADY_MOUNTED" -eq 0 ]; then
-	echo "Unmounting Kobo..."
-	maybe_sudo umount "$KOBO_MOUNT"
-	echo "Safe to disconnect."
-else
-	echo "Kobo was already mounted — left mounted."
-fi
+kobo_unmount
