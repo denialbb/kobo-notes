@@ -129,6 +129,39 @@ A native MicroTeX backend is **deferred** — see
 Known gap: math inside 4-space-indented code blocks is still extracted. Fenced
 blocks and inline code spans are correctly skipped.
 
+## Where generated files go
+
+Rendered HTML is written to a hidden `.rendered/` folder **beside the source
+`.md`**, and regenerated every time the `.md` is opened:
+
+```
+oc/rilassamenti/
+  notes.md
+  .rendered/notes.md.html
+```
+
+It used to go in a single shared cache, which was wrong twice over. This notes
+tree has 18 files called `notes.md` and 18 called `flashcards.md` — 47 of 75
+filenames are not unique — so renders overwrote each other. And a cache is
+wiped, so every render was lost on reboot.
+
+Math images, if a future image-producing backend is enabled, go in
+`<datadir>/markdownreader/math/`. Shared rather than per-document, because the
+cache key is a content hash and identical formulas recur across many notes; and
+outside `cache/` so they survive a reboot. The pure-Lua backend that ships emits
+inline HTML and writes no image files at all.
+
+**Tools → Markdown Reader → Delete generated files** removes every `.rendered/`
+folder, the math images, and any leftovers in the old cache location. It asks
+first, and it only deletes files carrying the plugin's marker comment — a file
+you wrote yourself that happens to sit in `.rendered/` is reported and kept.
+Your `.md` files are never touched.
+
+Generated files are tracked in an index under `<datadir>/markdownreader/`, so
+cleanup is exact rather than a filesystem sweep. Syncing is unaffected:
+syncnotes works from its own manifest of `.md` files and ignores everything
+else.
+
 ## Docs
 
 | Document | What it is |
