@@ -1,5 +1,14 @@
 # Slice 4: syncnotes.koplugin skeleton + menu
 
+> **Status: IMPLEMENTED — historical record (verified 2026-07-30).**
+> Shipped in `plugins/syncnotes.koplugin/` (`_meta.lua`, `main.lua`).
+> This is a record of how the work was sliced, not pending work.
+> Divergences: the shipped menu has two extra items, "Open Notes Folder" and
+> "Set Download Path"; the notes location is a configurable `notes_root`
+> setting (`getNotesDir()` returns `notes_root .. "/" .. repo .. "/"`) rather
+> than the hardcoded path below; and `init()` also auto-detects a PAT from
+> `secrets/`.
+
 Depends on: nothing (independent of markdownreader)
 
 ## Goal
