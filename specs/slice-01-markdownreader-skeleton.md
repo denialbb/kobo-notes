@@ -1,5 +1,11 @@
 # Slice 1: markdownreader.koplugin skeleton + menu
 
+> **Status: IMPLEMENTED — historical record (verified 2026-07-30).**
+> Shipped in `plugins/markdownreader.koplugin/` (`_meta.lua`, `main.lua`).
+> This is a record of how the work was sliced, not pending work.
+> Divergence: the `Placeholder` sub-item below was replaced in Slice 2 by
+> "Preview current file as HTML"; nothing else changed.
+
 ## Goal
 
 Create the directory structure and files for `markdownreader.koplugin` so it appears in KOReader's Tools menu and is toggleable in Plugin management.
