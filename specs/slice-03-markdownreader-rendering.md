@@ -1,5 +1,15 @@
 # Slice 3: markdownreader — markdown rendering
 
+> **Status: IMPLEMENTED — historical record (verified 2026-07-30).**
+> Shipped in `plugins/markdownreader.koplugin/main.lua`.
+> This is a record of how the work was sliced, not pending work.
+> Divergences from the shipped `openMarkdown`: **LaTeX math support was added
+> later** — the shipped version extracts math before `FileConverter:mdToHtml`
+> and substitutes the rendered math back into the HTML afterwards, via
+> `markdown_interceptor.lua` (see `docs/microtex_implementation_spec.html`).
+> It also shows an "Opening Markdown..." InfoMessage, uses
+> `util.splitFilePathName` (not `ffi/util`), and returns `true` on success.
+
 Depends on: Slice 2 (aux provider + stub openMarkdown)
 
 ## Goal
