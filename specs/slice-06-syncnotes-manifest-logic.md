@@ -1,5 +1,11 @@
 # Slice 6: syncnotes — manifest comparison logic (pure functions + unit tests)
 
+> **Status: IMPLEMENTED — historical record (verified 2026-07-30).**
+> Shipped in `plugins/syncnotes.koplugin/manifest.lua`, tests in
+> `tests/test_manifest.lua`.
+> This is a record of how the work was sliced, not pending work.
+> Divergence: none — the shipped module matches the code below.
+
 Depends on: Slice 4 (skeleton exists)
 
 ## Goal
