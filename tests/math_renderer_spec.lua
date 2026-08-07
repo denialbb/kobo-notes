@@ -225,7 +225,7 @@ describe("MathBackendLua", function()
         end
     end)
 
-    it("renders \\frac as a fraction span", function()
+    it("renders \\frac as a fraction table", function()
         local h = be:render("\\frac{a}{b}", false).html
         assert.is_truthy(h:match("mathfrac"))
         assert.is_truthy(h:find("a", 1, true))

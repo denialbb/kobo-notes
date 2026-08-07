@@ -318,3 +318,55 @@ describe("MarkdownInterceptor", function()
         end
     end)
 end)
+
+describe("Markdown tables", function()
+    local mi
+    before_each(function()
+        mi = MarkdownInterceptor.new()
+    end)
+
+    it("parses a standard markdown table", function()
+        local input = "Table:\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nEnd."
+        local out, _ = mi:process(input)
+        assert.is_truthy(out:find("<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>", 1, true))
+    end)
+
+    it("does not parse tables inside code blocks", function()
+        local input = "```\n| a |\n|---|\n| 1 |\n```"
+        local out, _ = mi:process(input)
+        assert.are.equal(input, out)
+    end)
+    
+    it("parses math inside table cells", function()
+        local input = "| a |\n|---|\n| $x^2$ |"
+        local out, subs = mi:process(input)
+        assert.is_truthy(out:find("<table><thead><tr><th>a</th></tr></thead><tbody><tr><td>XMATHTOKEN", 1, true))
+        assert.are.equal(1, #subs)
+        assert.are.equal("x^2", subs[1].latex)
+    end)
+end)
+
+describe("Multiline bold text", function()
+    local mi
+    before_each(function()
+        mi = MarkdownInterceptor.new()
+    end)
+
+    it("handles bold text spanning across newlines", function()
+        local input = "This is **bold\ntext**."
+        local out, _ = mi:process(input)
+        assert.is_truthy(out:find("<strong>bold\ntext</strong>", 1, true))
+    end)
+
+    it("does not process bold inside code spans", function()
+        local input = "Use `**bold\ntext**`."
+        local out, _ = mi:process(input)
+        assert.are.equal(input, out)
+    end)
+
+    it("does not process bold across blank lines", function()
+        local input = "**bold\n\ntext**"
+        local out, _ = mi:process(input)
+        assert.are.equal(input, out)
+    end)
+end)
