@@ -97,6 +97,7 @@ and leaves the card open beneath it (Cancel keeps the card intact).
   that the plugin's parser+engine work off-device.
 * On-device: `./deploy.sh` copies the plugin; manual pass is the remaining
   verification (see the plugin README's install steps).
+* Review & Audit: Verified against KOReader v2026.07 widget APIs on `/mnt/kobo/.adds/koreader/frontend/` and confirmed logger method call safety and `lfs.dir` iterator wrapping.
 
 ## Known gaps / deferred
 
