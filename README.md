@@ -6,17 +6,18 @@
 
 Sync and render Markdown notes from a private GitHub repo on a Kobo e-reader running KOReader — including LaTeX math, on-device, with no PC in the loop.
 
-Two pure-Lua koplugins. **Nothing is cross-compiled**; both are dropped into KOReader's `plugins/` directory and hot-loaded.
+Three pure-Lua koplugins. **Nothing is cross-compiled**; they are dropped into KOReader's `plugins/` directory and hot-loaded.
 
 - **`markdownreader.koplugin`** — tap a `.md` file and it opens formatted (headings, bold, lists, links, code, tables) via KOReader's bundled luamd parser and the crengine HTML renderer. Also renders inline and block LaTeX (`$…$`, `$$…$$`) to unicode/HTML.
 - **`syncnotes.koplugin`** — from the Kobo itself, fetches `.md` files from a private GitHub repo over HTTPS using a personal access token. One menu action, add/update/delete mirrored against the remote branch.
+- **`flashcards.koplugin`** — quizzes you on the `flashcards.md` notes in the synced tree (e-ink counterpart of the desktop `~/.local/bin/quiz.py`): theme/deck selection, reveal-and-self-score, missed-card review.
 
 > [!NOTE]
 > **Status:** both implemented and deployed. Verified against KOReader **v2026.07** on-device (2026-07-30).
 
 ## Clone
 
-The two plugins live in **separate submodule repos**, so a plain `git clone` leaves `plugins/` empty:
+The three plugins live in **separate submodule repos**, so a plain `git clone` leaves `plugins/` empty:
 
 ```bash
 git clone git@github.com:denialbb/kobo-notes.git
@@ -72,13 +73,13 @@ This copies everything needed to debug into `diagnostics/<timestamp>/` (and poin
 
 > [!WARNING]
 > GitHub tokens are stripped from everything collected, and `secrets/` is never copied. The script warns if a credential-shaped string survives redaction.
-> 
+>
 > `device-vs-repo.diff` matters more than it looks: working fixes have twice existed *only* on the device and been destroyed by the next deploy.
 
 ## Tests
 
 ```bash
-lua run_busted_tests.lua      # 112 tests
+lua run_busted_tests.lua      # 145 tests
 ```
 
 > [!NOTE]
@@ -88,6 +89,9 @@ lua run_busted_tests.lua      # 112 tests
 | --- | --- |
 | `tests/markdown_interceptor_spec.lua` | math extraction, code-fence exclusion, substitution |
 | `tests/math_renderer_spec.lua` | backend selection, fallback, caching, hashing |
+| `tests/flashcards_parser_spec.lua` | flashcards.md parsing (format parity, multi-line, edge cases) |
+| `tests/flashcards_quiz_spec.lua` | quiz state machine (shuffle, scoring, misses, review) |
+| `tests/flashcards_cli_spec.lua` | end-to-end CLI smoke tests over the fixture corpus |
 | `tests/test_manifest.lua` | sync manifest diffing (standalone: `lua tests/test_manifest.lua`) |
 | `tests/test_sync_integration.lua` | sync pipeline (needs `lua-filesystem`) |
 
@@ -142,10 +146,12 @@ Generated files are tracked in an index under `<datadir>/markdownreader/`, so cl
 ```
 kobo-notes/
 ├── docs/                          # design docs, research
-├── tests/                         # test suites
+├── tests/                         # test suites + fixture corpus (tests/fixtures/)
+├── tools/                         # local dev helpers (flashcards-cli.lua)
 ├── plugins/
 │   ├── markdownreader.koplugin/   # submodule — .md + math renderer
-│   └── syncnotes.koplugin/        # submodule — GitHub sync
+│   ├── syncnotes.koplugin/        # submodule — GitHub sync
+│   └── flashcards.koplugin/       # submodule — quiz on flashcards.md
 ├── secrets/                       # PAT (gitignored)
 ├── deploy.sh
 └── run_busted_tests.lua

@@ -18,6 +18,7 @@ KOBO_SSH_PORT="2222"
 
 PLUGIN_MARKDOWN="plugins/markdownreader.koplugin"
 PLUGIN_SYNCNOTES="plugins/syncnotes.koplugin"
+PLUGIN_FLASHCARDS="plugins/flashcards.koplugin"
 
 # --- Step 1: Build native math backend (optional) ---
 # The math renderer is pure Lua by default and needs no build step.
@@ -92,6 +93,7 @@ deploy_plugin() {
 
 deploy_plugin "$PLUGIN_MARKDOWN"
 deploy_plugin "$PLUGIN_SYNCNOTES"
+deploy_plugin "$PLUGIN_FLASHCARDS"
 
 echo "Deploying secrets..."
 if [ -d secrets ]; then
