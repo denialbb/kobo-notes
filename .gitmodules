@@ -4,3 +4,6 @@
 [submodule "plugins/markdownreader.koplugin"]
 	path = plugins/markdownreader.koplugin
 	url = git@github.com:denialbb/markdownreader.koplugin.git
+[submodule "plugins/flashcards.koplugin"]
+	path = plugins/flashcards.koplugin
+	url = git@github.com:denialbb/flashcards.koplugin.git
