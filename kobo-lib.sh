@@ -113,3 +113,22 @@ kobo_unmount() {
 		echo "Kobo was already mounted at $KOBO_MOUNT — left mounted."
 	fi
 }
+
+# Best-effort unmount for EXIT traps: never aborts the calling script, unmounts
+# the Kobo even when we did not mount it (so a deploy never leaves the device
+# mounted, whatever happened), and is safe to call more than once. No-op when no
+# Kobo was located/mounted at all.
+kobo_cleanup() {
+	sync
+	if [ -z "${KOBO_DEV:-}" ]; then
+		return
+	fi
+	if [ -n "$(device_mountpoint "$KOBO_DEV")" ]; then
+		echo "Unmounting $KOBO_MOUNT ..."
+		if maybe_sudo umount "$KOBO_MOUNT" 2>/dev/null; then
+			echo "Safe to disconnect."
+		else
+			echo "WARNING: could not unmount $KOBO_MOUNT — is it still in use?" >&2
+		fi
+	fi
+}

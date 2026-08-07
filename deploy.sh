@@ -1,14 +1,20 @@
 #!/bin/sh
 # Deploy plugins + secrets to Kobo (USB-mounted).
 # Builds the optional native math backend first, if a Makefile is present.
-# Finds the Kobo by filesystem label, mounts/unmounts it automatically, and
-# leaves it mounted if it already was. Prompts for sudo if needed.
+# Finds the Kobo by filesystem label, mounts it automatically, copies the
+# plugins, and ALWAYS unmounts it on exit — success, mid-script failure, or
+# interrupt (EXIT trap). Prompts for sudo if needed.
 # Clears generated HTML + math-image caches so render tests start fresh.
 set -eu
 
 # Device detection, mounting and the derived KOBO_* paths live in kobo-lib.sh,
 # shared with collect-diagnostics.sh.
 . "$(dirname "$0")/kobo-lib.sh"
+
+# Always unmount at the end, in any case: even if a later step fails (set -e
+# would otherwise exit before the unmount), even if the Kobo was already
+# mounted. Never leave the device in a mounted/half-mounted state.
+trap kobo_cleanup EXIT INT TERM
 
 # Remote cleanup (SSH to Kobo, optional — set KOBO_SSH to a host string)
 # Typical: KOBO_SSH="root@192.168.2.2"  port 2222
@@ -106,7 +112,6 @@ sync
 
 echo "Done."
 echo ""
-
-# --- Step 5: Cleanup ---
-# Unmount unless it was already mounted
-kobo_unmount
+# Unmounting happens automatically via the EXIT trap set up at the top of this
+# script (kobo_cleanup), so it also runs when an earlier step fails or the
+# script is interrupted.
