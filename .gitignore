@@ -18,3 +18,4 @@ arm-gnu-toolchain-*
 
 # Collected device diagnostics (contains device data; redacted but not for VCS)
 /diagnostics/
+.obsidian/
