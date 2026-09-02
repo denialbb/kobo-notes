@@ -125,11 +125,19 @@ describe("MathRenderer:render", function()
             isAvailable = function() return true end,
             new = function() return { render = function() error("boom") end } end,
         })
+        -- When fallback backend is available, it falls back to Lua without raising
         local r = MathRenderer.new{ backend = "throwing" }
         local res, err
         assert.has_no_error(function() res, err = r:render("x", false) end)
-        assert.is_nil(res)
-        assert.is_not_nil(err)
+        assert.is_not_nil(res)
+        assert.are.equal("html", res.kind)
+
+        -- When fallback is unavailable, it still never raises and returns nil, err
+        r.fallback_backend = nil
+        local res2, err2
+        assert.has_no_error(function() res2, err2 = r:render("y", false) end)
+        assert.is_nil(res2)
+        assert.is_not_nil(err2)
     end)
 end)
 

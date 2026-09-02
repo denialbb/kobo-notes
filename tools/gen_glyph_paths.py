@@ -70,6 +70,12 @@ def main():
     if args.codepoints:
         cps += [int(x) for x in args.codepoints.split(",")]
     cps = sorted(set(cps))
+    if not cps:
+        print(
+            "Error: No codepoints found (check --svg-dir or provide --codepoints).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     upm, cmap, gs = load_font(args.font)
     lines = [
@@ -88,8 +94,6 @@ def main():
         lines.append('    [%d] = "%s",' % (cp, d))
     lines.append("}")
     lines.append("return M")
-    open(args.out, "w", encoding="utf-8").write("\n".join(lines) + "\n")
-    print("wrote", args.out, "for", len(cps), "codepoints; upm", upm)
     if missing:
         print(
             "MISSING glyphs:",
@@ -97,6 +101,9 @@ def main():
             file=sys.stderr,
         )
         sys.exit(1)  # incomplete coverage must fail the regen run loudly
+
+    open(args.out, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    print("wrote", args.out, "for", len(cps), "codepoints; upm", upm)
 
 
 if __name__ == "__main__":

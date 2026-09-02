@@ -68,12 +68,17 @@ if [ -f "$PLUGIN_MARKDOWN/Makefile" ]; then
 	if [ "$HAS_TOOLCHAIN" -eq 1 ]; then
 		# zig cross-compiles without a local arm toolchain; otherwise use the
 		# arm-none-linux-gnueabihf-g++ found above.
-		KOBO_CXX_ARG=""
-		command -v zig >/dev/null 2>&1 && KOBO_CXX_ARG='KOBO_CXX=zig c++ -target arm-linux-gnueabihf.2.19'
-		(make clean >/dev/null 2>&1 && make $KOBO_CXX_ARG kobo >/dev/null 2>&1) || (
-			printf "\n${C_ERROR}Build failed!${C_RESET}\n"
-			exit 1
-		)
+		if command -v zig >/dev/null 2>&1; then
+			(make clean >/dev/null 2>&1 && make KOBO_CXX="zig c++ -target arm-linux-gnueabihf.2.19" kobo >/dev/null 2>&1) || (
+				printf "\n${C_ERROR}Build failed!${C_RESET}\n"
+				exit 1
+			)
+		else
+			(make clean >/dev/null 2>&1 && make kobo >/dev/null 2>&1) || (
+				printf "\n${C_ERROR}Build failed!${C_RESET}\n"
+				exit 1
+			)
+		fi
 		mv kobo-libmicrotex.so libmicrotex.so
 	else
 		# No cross-compiler available. The MicroTeX backend is a pure-Lua change now

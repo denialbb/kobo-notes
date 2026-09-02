@@ -103,11 +103,9 @@ describe("MathBackendLua environments", function()
         end
     end)
 
-    it("splits rows into separate blocks", function()
+    it("splits rows into separate lines", function()
         local h = isRendered("\\begin{gather} a \\\\ b \\\\ c \\end{gather}")
-        local n = 0
-        for _ in h:gmatch("display: block") do n = n + 1 end
-        assert.are.equal(4, n)      -- outer mathblock + three rows
+        assert.is_truthy(h:find("a<br/>b<br/>c", 1, true), "rows must be separated by <br/>")
     end)
 
     it("wraps pmatrix in parentheses and bmatrix in brackets", function()
@@ -180,9 +178,10 @@ describe("MathBackendLua environments", function()
         assert.is_truthy(h:find("\226\137\165", 1, true))    -- ge
         assert.is_truthy(h:find("\226\136\136", 1, true))    -- in
         assert.is_falsy(h:find("<div", 1, true))
-        -- five aligned rows plus the outer block
+        assert.is_truthy(h:find("display: inline%-block"))
+        -- five aligned rows (4 <br/> separators) plus 2 wrapping <br/> from outer block
         local n = 0
-        for _ in h:gmatch("display: block") do n = n + 1 end
+        for _ in h:gmatch("<br/>") do n = n + 1 end
         assert.are.equal(6, n)
     end)
 end)
