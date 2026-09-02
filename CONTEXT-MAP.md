@@ -11,3 +11,7 @@
 - **Note Synchronization → Markdown & Math Rendering**: Note Synchronization provisions and updates source Markdown files on the device filesystem consumed by Markdown & Math Rendering.
 - **Note Synchronization → Flashcard Study**: Note Synchronization provisions and updates source Markdown files parsed by Flashcard Study for quiz generation.
 - **Markdown & Math Rendering ↔ Flashcard Study**: Both contexts operate concurrently on the shared on-device note hierarchy without direct inter-plugin coupling.
+
+## Deployment & Hardware
+
+- **Device Mount Point**: The target Kobo device is mounted at `~/Mount/KOBO`.
