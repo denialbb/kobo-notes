@@ -19,3 +19,7 @@ arm-gnu-toolchain-*
 # Collected device diagnostics (contains device data; redacted but not for VCS)
 /diagnostics/
 .obsidian/
+
+# Herdr worker progress status files
+.herdr/status/*.json
+!.herdr/status/template.json

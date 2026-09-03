@@ -1,0 +1,21 @@
+{
+  "worker_id": "worker-template",
+  "task": "Task description here",
+  "phase": "planning",
+  "progress": 0.0,
+  "progress_label": "0/0 todos",
+  "todos": [
+    {
+      "id": "1",
+      "text": "First subtask",
+      "status": "todo"
+    },
+    {
+      "id": "2",
+      "text": "Second subtask",
+      "status": "todo"
+    }
+  ],
+  "last_update": "2026-09-03T00:00:00Z",
+  "notes": ""
+}

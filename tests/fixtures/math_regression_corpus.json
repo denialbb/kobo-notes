@@ -1,0 +1,44 @@
+[
+  {
+    "id": "minimal_operator_test",
+    "latex": "\\displaystyle\\sum_{i=1}^{n}\\epsilon_i=\\int_0^1 f(x)\\,dx",
+    "is_display": true,
+    "description": "Minimal test expression containing epsilon, sum, and integral operators.",
+    "expected_symbols": ["sum", "epsilon", "int"]
+  },
+  {
+    "id": "sum_subscript_superscript",
+    "latex": "\\sum_{k=0}^{\\infty} \\frac{1}{k!}",
+    "is_display": true,
+    "description": "Sum with infinity superscript and fraction with factorial.",
+    "expected_symbols": ["sum", "infty"]
+  },
+  {
+    "id": "definite_integral",
+    "latex": "\\int_{-\\infty}^{+\\infty} e^{-x^2} dx = \\sqrt{\\pi}",
+    "is_display": true,
+    "description": "Gaussian integral from -inf to +inf equaling sqrt(pi).",
+    "expected_symbols": ["int", "infty", "sqrt", "pi"]
+  },
+  {
+    "id": "tall_cases_bracket",
+    "latex": "f(x) = \\begin{cases} x^2 & x \\ge 0 \\\\ -x & x < 0 \\end{cases}",
+    "is_display": true,
+    "description": "Piecewise cases expression with tall left brace.",
+    "expected_symbols": ["cases", "ge"]
+  },
+  {
+    "id": "matrix_brackets",
+    "latex": "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
+    "is_display": true,
+    "description": "2x2 parenthesized matrix.",
+    "expected_symbols": ["pmatrix"]
+  },
+  {
+    "id": "complex_limits",
+    "latex": "\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1",
+    "is_display": false,
+    "description": "Limit with arrow operator.",
+    "expected_symbols": ["lim", "to"]
+  }
+]
